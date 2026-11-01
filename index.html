@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>ETH/BTC</title>
+<style>
+  /* 根层必须完全透明，否则透明窗口的四角会露出方形底色 */
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  /* 圆角 + 半透明背景只画在这一层，四角自然透出桌面 */
+  #card {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border-radius: 16px;
+    background: rgba(18, 20, 28, 0.82);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #f5f7fa;
+    user-select: none;
+    cursor: move;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  }
+  #wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.35;
+  }
+  .row { white-space: nowrap; font-weight: 600; letter-spacing: 0.3px; }
+  #ethPrice { font-size: 9px; }
+  #btcPrice { font-size: 8px; opacity: 0.92; }
+</style>
+</head>
+<body>
+  <div id="card">
+    <div id="wrap">
+      <div class="row"><span id="ethPrice">--</span></div>
+      <div class="row"><span id="btcPrice">--</span></div>
+    </div>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>

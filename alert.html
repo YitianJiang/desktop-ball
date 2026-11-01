@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>!</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; cursor: pointer; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .circle {
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    background: #e02424;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 50px rgba(224, 36, 36, 0.85);
+    animation: pulse 1s ease-in-out infinite;
+  }
+  .bang {
+    color: #ffffff;
+    font-size: 130px;
+    font-weight: 900;
+    line-height: 1;
+    font-family: Arial, sans-serif;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 40px rgba(224, 36, 36, 0.7); }
+    50%      { transform: scale(1.08); box-shadow: 0 0 70px rgba(224, 36, 36, 1); }
+  }
+</style>
+</head>
+<body>
+  <div class="circle"><span class="bang">!</span></div>
+  <script>
+    const { ipcRenderer } = require('electron');
+    // 点击任意处关闭报警弹框
+    document.body.addEventListener('click', () => ipcRenderer.send('alert:dismiss'));
+    document.body.addEventListener('contextmenu', (e) => e.preventDefault());
+  </script>
+</body>
+</html>

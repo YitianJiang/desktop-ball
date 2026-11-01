@@ -1,0 +1,12 @@
+{
+  "name": "eth-floating-monitor",
+  "version": "1.0.0",
+  "description": "ETH 价格悬浮球：实时从币安获取价格，跌破阈值弹框报警",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  }
+}

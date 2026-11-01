@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>告警设置</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    background: #1b1e27; color: #f5f7fa; }
+  .box { padding: 18px 20px; }
+  h2 { font-size: 15px; margin: 0 0 14px; font-weight: 600; }
+  .field { margin-bottom: 14px; }
+  label { display: block; font-size: 12px; opacity: 0.7; margin-bottom: 6px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid #3a3f4d; background: #11141b; color: #f5f7fa; font-size: 14px; }
+  .btns { display: flex; gap: 10px; margin-top: 4px; }
+  button { flex: 1; padding: 9px; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; }
+  .save { background: #2f7df6; color: #fff; }
+  .cancel { background: #333845; color: #cfd3dc; }
+  .quit { background: transparent; color: #e05656; border: 1px solid #5a2a2a; margin-top: 10px; }
+  .tip { font-size: 11px; opacity: 0.5; margin-top: 12px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h2>价格告警设置</h2>
+  <div class="field">
+    <label>ETH 低于（USDT）触发报警</label>
+    <input id="eth" type="number" step="any" min="0">
+  </div>
+  <div class="field">
+    <label>BTC 低于（USDT）触发报警</label>
+    <input id="btc" type="number" step="any" min="0">
+  </div>
+  <div class="field" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+    <input id="auto" type="checkbox" style="width:auto; padding:0;">
+    <label style="margin:0; opacity:1; font-size:13px;">开机自动启动</label>
+  </div>
+  <div class="btns">
+    <button class="cancel" id="cancel">取消</button>
+    <button class="save" id="save">保存</button>
+  </div>
+  <button class="quit" id="quit">退出程序</button>
+  <div class="tip">设置后实时生效并自动保存，重启后仍然保留。<br>单击小球可再次打开本设置；退出请点上面的「退出程序」。</div>
+</div>
+<script>
+  const { ipcRenderer } = require('electron');
+  ipcRenderer.on('config', (e, cfg) => {
+    document.getElementById('eth').value = cfg.eth;
+    document.getElementById('btc').value = cfg.btc;
+    if (typeof cfg.autostart === 'boolean') document.getElementById('auto').checked = cfg.autostart;
+  });
+  document.getElementById('save').onclick = () => {
+    const eth = parseFloat(document.getElementById('eth').value);
+    const btc = parseFloat(document.getElementById('btc').value);
+    if (isNaN(eth) || isNaN(btc)) return;
+    const autostart = document.getElementById('auto').checked;
+    ipcRenderer.send('save-settings', { eth, btc, autostart });
+  };
+  document.getElementById('cancel').onclick = () => ipcRenderer.send('settings:close');
+  document.getElementById('quit').onclick = () => ipcRenderer.send('app:quit');
+  document.body.addEventListener('contextmenu', (e) => e.preventDefault());
+</script>
+</body>
+</html>
