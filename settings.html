@@ -7,6 +7,7 @@
   html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Arial, sans-serif;
     background: #1b1e27; color: #f5f7fa; }
   .box { padding: 18px 20px; max-height: 100vh; overflow-y: auto; }
+  .box::-webkit-scrollbar { display: none; }  /* 去掉右侧滚动条（滚轮仍可滚动） */
   h2 { font-size: 15px; margin: 0 0 14px; font-weight: 600; }
   h3 { font-size: 13px; margin: 18px 0 10px; font-weight: 600; opacity: 0.9;
     border-top: 1px solid #2c303c; padding-top: 14px; }
@@ -87,11 +88,12 @@
   </div>
   <button class="quit" id="quit">退出程序</button>
   <datalist id="usdtPairs"></datalist>
+  <div id="pairHint" class="tip"></div>
   <div class="tip">
     「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 合约交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
     「均线接近告警」：后台定时拉取所选合约交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
     例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
-    交易对输入框支持自动补全：优先列出币安 U 本位合约 USDT 交易对（输入「ena」会提示「ENAUSDT」）；取不到时退回现货列表。<br>
+    交易对输入框支持自动补全：列出币安 U 本位合约 USDT 永续交易对（输入「ena」会提示「ENAUSDT」）；仅合约，不列现货。<br>
     「本地代理」：合约(fapi)行情在国内被墙，需走你本地 Clash 等代理；填 Clash 的 HTTP 代理端口（如 127.0.0.1:7897）。eth/btc 始终走现货镜像、不经代理。<br>
     设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
   </div>
@@ -99,36 +101,32 @@
 <script>
   const { ipcRenderer } = require('electron');
 
-  // 有效 USDT 交易对集合（用于自动补全与保存时校验）。
-  // 优先取币安 U 本位合约 exchangeInfo（fapi），取不到再退回现货（data-api）。
+  // 有效合约(USDT 永续)交易对集合：来自主进程（经本地代理拉 fapi），用于自动补全与保存校验。
   let VALID_USDT = new Set();
 
-  async function loadUsdtPairs() {
-    const dl = document.getElementById('usdtPairs');
-    const tryUrl = async (url) => {
-      try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
-        if (!r.ok) return false;
-        const j = await r.json();
-        if (!Array.isArray(j.symbols)) return false;
-        for (const s of j.symbols) {
-          // 合约：排除季度/交割（含下划线，如 BTCUSDT_241227）；现货：直接收 USDT
-          if (s.status === 'TRADING' && typeof s.symbol === 'string' &&
-              s.symbol.endsWith('USDT') && !s.symbol.includes('_')) {
-            if (!VALID_USDT.has(s.symbol)) {
-              VALID_USDT.add(s.symbol);
-              const o = document.createElement('option');
-              o.value = s.symbol;
-              dl.appendChild(o);
-            }
-          }
-        }
-        return true;
-      } catch (e) { return false; }
-    };
-    const ok = await tryUrl('https://fapi.binance.com/fapi/v1/exchangeInfo');
-    if (!ok) await tryUrl('https://data-api.binance.vision/api/v3/exchangeInfo');
+  function loadUsdtPairs() {
+    // 通过主进程拉取合约交易对列表（主进程走 session 代理，渲染进程 fetch 不吃代理）
+    ipcRenderer.send('get-usdt-pairs');
   }
+  ipcRenderer.on('usdt-pairs', (e, list) => {
+    const dl = document.getElementById('usdtPairs');
+    dl.innerHTML = '';
+    VALID_USDT = new Set(list || []);
+    for (const sym of VALID_USDT) {
+      const o = document.createElement('option');
+      o.value = sym;
+      dl.appendChild(o);
+    }
+    // 加载失败（代理没通 / Clash 没起）→ 明确提示，不再用现货列表冒充
+    const hint = document.getElementById('pairHint');
+    if (VALID_USDT.size === 0) {
+      hint.textContent = '合约交易对列表加载失败：请确认本地代理(Clash)已运行且端口正确（默认 127.0.0.1:7897），保存后重试。';
+      hint.style.color = '#e0a23c';
+    } else {
+      hint.textContent = '已加载 ' + VALID_USDT.size + ' 个 U 本位合约交易对（仅合约，经本地代理）。';
+      hint.style.color = 'rgba(245,247,250,0.5)';
+    }
+  });
   loadUsdtPairs();
 
   ipcRenderer.on('config', (e, cfg) => {

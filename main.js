@@ -1,6 +1,41 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+const { app, BrowserWindow, ipcMain, session, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// 用 Electron 的 net.request 发 HTTP/HTTPS：它会走 session 配置的代理（包括 fapi 走本地 Clash），
+// 而 Node 全局 fetch 不认 session 代理、永远直连（国内直连 fapi 被墙）。所有合约(fapi)请求都走这里。
+function httpGet(url, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    let req;
+    try {
+      req = net.request(url);
+    } catch (e) { return reject(e); }
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) { done = true; try { req.abort(); } catch (e) {} reject(new Error('timeout')); }
+    }, timeoutMs);
+    req.on('response', (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c.toString(); });
+      res.on('end', () => {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        resolve({ status: res.statusCode, body: data });
+      });
+    });
+    req.on('error', (e) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      reject(e);
+    });
+    req.end();
+  });
+}
+async function httpJson(url, timeoutMs = 10000) {
+  const r = await httpGet(url, timeoutMs);
+  if (r.status !== 200) throw new Error('HTTP ' + r.status);
+  return JSON.parse(r.body);
+}
 
 let ballWin = null;
 let alertWin = null;
@@ -13,7 +48,7 @@ const DEFAULT_CFG = {
   btc: 70000,
   autostart: true,
   symbol3: '', // 第三交易对：空=不显示；配置后球上加一行实时价（eth/btc 始终显示）
-  proxy: '',   // 本地代理（Clash HTTP 端口，如 127.0.0.1:7897）；空=不走代理，合约行情取不到
+  proxy: '127.0.0.1:7897',   // 本地代理（Clash HTTP 端口）；合约(fapi)行情走它；eth/btc 现货绕过直连。如你的 Clash 端口不同，请在设置里改
   ema: { enabled: false, symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5, pollSec: 10 },
 };
 
@@ -77,6 +112,27 @@ async function applyProxy(proxy) {
       await session.defaultSession.setProxy({ proxyRules: 'direct://' });
     }
   } catch (e) {}
+}
+
+// 币安 U 本位合约(USDT 永续)交易对列表：仅作设置页自动补全用。
+// 走 fapi（合约），务必经本地代理；**不回退到现货**，否则会把现货对当成合约对。
+let FUTURES_SYMBOLS = null; // null=未加载；[]=加载失败
+async function loadFuturesSymbols() {
+  try {
+    const j = await httpJson('https://fapi.binance.com/fapi/v1/exchangeInfo', 12000);
+    if (!j || !Array.isArray(j.symbols)) { FUTURES_SYMBOLS = []; return; }
+    const set = new Set();
+    for (const s of j.symbols) {
+      // 仅 USDT 永续（合约 symbol 形如 BTCUSDT；季度交割含下划线如 BTCUSDT_241227 排除）
+      if (s.status === 'TRADING' && typeof s.symbol === 'string' &&
+          s.symbol.endsWith('USDT') && !s.symbol.includes('_')) {
+        set.add(s.symbol);
+      }
+    }
+    FUTURES_SYMBOLS = [...set].sort();
+  } catch (e) {
+    FUTURES_SYMBOLS = [];
+  }
 }
 let cfg = readConfig();
 
@@ -206,16 +262,12 @@ function startEmaMonitor() {
   const tick = async () => {
     try {
       const klUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${encodeURIComponent(sym)}&interval=${interval}&limit=${limit}`;
-      const klRes = await fetch(klUrl, { signal: AbortSignal.timeout(8000) });
-      if (!klRes.ok) return;
-      const klines = await klRes.json();
+      const klines = await httpJson(klUrl, 8000);
       if (!Array.isArray(klines) || klines.length < emaPeriod) return;
       const closes = klines.map((k) => parseFloat(k[4]));
       const ema = computeEMA(closes, emaPeriod);
       const prUrl = `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(sym)}`;
-      const prRes = await fetch(prUrl, { signal: AbortSignal.timeout(8000) });
-      if (!prRes.ok) return;
-      const pr = await prRes.json();
+      const pr = await httpJson(prUrl, 8000);
       const price = parseFloat(pr.price);
       if (!ema || !price) return;
       const distPct = (Math.abs(price - ema) / ema) * 100;
@@ -285,6 +337,15 @@ ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('open-settings', () => openSettings());
 ipcMain.on('settings:close', () => { if (settingsWin) settingsWin.close(); });
 ipcMain.on('ema-alert:dismiss', () => { if (emaAlertWin) { try { emaAlertWin.close(); } catch (e) {} emaAlertWin = null; } });
+// 设置页请求币安 U 本位合约(USDT 永续)交易对列表（仅作自动补全）。走主进程 fapi（经本地代理），
+// 不回退现货；加载失败返回空数组，由设置页提示用户检查代理。
+ipcMain.on('get-usdt-pairs', (e) => {
+  if (FUTURES_SYMBOLS === null) {
+    loadFuturesSymbols().then(() => { if (e.sender && !e.sender.isDestroyed()) e.sender.send('usdt-pairs', FUTURES_SYMBOLS || []); });
+  } else {
+    if (e.sender && !e.sender.isDestroyed()) e.sender.send('usdt-pairs', FUTURES_SYMBOLS);
+  }
+});
 ipcMain.on('save-settings', async (e, d) => {
   const ema = d.ema || {};
   cfg = {
@@ -322,6 +383,7 @@ ipcMain.on('win:move', (e, delta) => {
 
 app.whenReady().then(async () => {
   await applyProxy(cfg.proxy); // 先设代理路由（eth/btc 现货绕过、合约走代理），再加载页面
+  loadFuturesSymbols(); // 预拉合约交易对列表（经代理），供设置页自动补全
   createBall();
   // 开机自启动：按配置决定（默认开启），写入系统登录项
   applyAutostart(cfg.autostart !== false);
