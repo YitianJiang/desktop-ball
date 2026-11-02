@@ -128,7 +128,7 @@ npx electron-builder --win
 ## 文件结构
 
 - `main.js` —— Electron 主进程：创建悬浮球 / 报警 / 设置 / 均线告警窗口，处理 IPC，读写 `config.json`，注册开机自启动，后台轮询计算 EMA 并比对现价。
-- `index.html` / `renderer.js` —— 悬浮球页面与行情逻辑（双币+可选第三币、拖动、阈值报警、置顶、跳过任务栏，第三币动态订阅行情）。
+- `index.html` / `renderer.js` —— 悬浮球页面与行情逻辑（双币+可选第三交易对、拖动、阈值报警、置顶、跳过任务栏，第三交易对动态订阅行情）。
 - `alert.html` —— ETH/BTC 报警弹框（仅一个红色「!」）。
 - `ema_alert.html` —— 均线接近告警弹窗（带文字详情）。
 - `settings.html` —— 告警阈值、开机自启动、均线接近监控设置框。

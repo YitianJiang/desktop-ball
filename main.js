@@ -274,7 +274,7 @@ ipcMain.on('save-settings', (e, d) => {
     eth: d.eth,
     btc: d.btc,
     autostart: !!d.autostart,
-    symbol3: (typeof d.symbol3 === 'string' && d.symbol3) ? String(d.symbol3).toUpperCase().replace(/[^A-Z0-9]/g, '') : '',
+    symbol3: (typeof d.symbol3 === 'string' && d.symbol3) ? String(d.symbol3).toUpperCase().replace(/[^A-Z0-9]/g, '') : '', // 第三交易对（第三个可配置交易对，仅显示不报警）
     ema: {
       enabled: !!ema.enabled,
       symbol: String(ema.symbol || 'HYPEUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT',

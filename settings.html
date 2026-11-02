@@ -39,8 +39,8 @@
     <input id="btc" type="number" step="any" min="0">
   </div>
   <div class="field">
-    <label>第三币（默认不显示；下拉选择后在球上加一行实时价）</label>
-    <select id="sym3"></select>
+    <label>第三交易对（默认不显示；输入或选择某 USDT 交易对后，球上加一行实时价）</label>
+    <input id="sym3" list="usdtPairs" type="text" placeholder="如 ENAUSDT / HYPEUSDT" autocomplete="off">
   </div>
   <div class="check">
     <input id="auto" type="checkbox">
@@ -53,8 +53,8 @@
     <label>启用（价格接近均线时弹窗告警）</label>
   </div>
   <div class="field">
-    <label>交易对（下拉选择）</label>
-    <select id="emaSymbol"></select>
+    <label>交易对（输入或选择，仅 USDT 交易对）</label>
+    <input id="emaSymbol" list="usdtPairs" type="text" placeholder="如 HYPEUSDT" autocomplete="off">
   </div>
   <div class="field">
     <label>均线配置（K线周期 · 均线周期）</label>
@@ -76,22 +76,17 @@
     <button class="save" id="save">保存</button>
   </div>
   <button class="quit" id="quit">退出程序</button>
+  <datalist id="usdtPairs"></datalist>
   <div class="tip">
-    「第三币」：ETH、BTC 始终显示，第三币默认不显示，下拉选某个交易对后球上会多出一行实时价（纯数字、无标签）。<br>
+    「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
     「均线接近告警」：后台定时拉取所选交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
     例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
+    交易对输入框支持自动补全：输入「ena」会提示「ENAUSDT」等 USDT 交易对。<br>
     设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
   </div>
 </div>
 <script>
   const { ipcRenderer } = require('electron');
-
-  // 常见 USDT 永续交易对（用于「第三币」与「均线交易对」下拉）
-  const SYMBOLS = ['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX','LINK','DOT','MATIC','LTC',
-    'TRX','NEAR','ATOM','UNI','AAVE','AR','OP','APT','SUI','TIA','SEI','INJ','HYPE','PEPE','WLD',
-    'FET','RNDR','ETC','BCH','FIL','ICP','HBAR','VET','ALGO','EOS','XLM','XTZ','KAVA','RUNE','GRT',
-    'CHZ','ENJ','SAND','MANA','AXS','THETA','FTM','CRV','LDO','MKR','SNX','COMP','YFI','UMA','BAL',
-    'ZRX','1INCH','DYDX','GMX','PERP','KSM','FLOW','EGLD','ZIL','BAT','ZEC','DASH','XMR'];
 
   // 均线配置：K线周期 · 均线周期（常用组合，合并为一个下拉）
   const EMA_CONFIGS = [
@@ -122,14 +117,30 @@
     }
   }
 
-  // 第三币下拉：首项「不显示」，且排除 ETH/BTC（避免与固定两币重复）
-  fillSelect(
-    document.getElementById('sym3'),
-    [{ v: '', t: '不显示' }].concat(
-      SYMBOLS.filter((s) => s !== 'ETH' && s !== 'BTC').map((s) => ({ v: s + 'USDT', t: s }))
-    ),
-    ''
-  );
+  // 有效 USDT 交易对集合（用于自动补全与保存时校验）。
+  // 数据源：币安现货 exchangeInfo（app 的行情/EMA 均走现货端点 data-api.binance.vision）。
+  let VALID_USDT = new Set();
+
+  async function loadUsdtPairs() {
+    try {
+      const r = await fetch('https://data-api.binance.vision/api/v3/exchangeInfo', { signal: AbortSignal.timeout(10000) });
+      if (!r.ok) return;
+      const j = await r.json();
+      const dl = document.getElementById('usdtPairs');
+      if (!Array.isArray(j.symbols)) return;
+      for (const s of j.symbols) {
+        if (s.status === 'TRADING' && typeof s.symbol === 'string' && s.symbol.endsWith('USDT')) {
+          VALID_USDT.add(s.symbol);
+          const o = document.createElement('option');
+          o.value = s.symbol;
+          dl.appendChild(o);
+        }
+      }
+    } catch (e) {
+      // 拉取失败则留空：用户仍可手填，保存时若集合为空则跳过校验
+    }
+  }
+  loadUsdtPairs();
 
   ipcRenderer.on('config', (e, cfg) => {
     document.getElementById('eth').value = cfg.eth;
@@ -137,12 +148,12 @@
     if (typeof cfg.autostart === 'boolean') document.getElementById('auto').checked = cfg.autostart;
     document.getElementById('sym3').value = cfg.symbol3 || '';
     const ema = cfg.ema || {};
-    fillSelect(document.getElementById('emaSymbol'), SYMBOLS.map((s) => ({ v: s + 'USDT', t: s })), ema.symbol || 'HYPEUSDT');
     fillSelect(
       document.getElementById('emaConfig'),
       EMA_CONFIGS,
       ema.interval && ema.emaPeriod ? ema.interval + ':' + ema.emaPeriod : '5m:7'
     );
+    document.getElementById('emaSymbol').value = ema.symbol || 'HYPEUSDT';
     document.getElementById('emaEnabled').checked = !!ema.enabled;
     document.getElementById('emaProx').value = ema.proximityPct != null ? ema.proximityPct : 0.5;
     document.getElementById('emaPoll').value = ema.pollSec != null ? ema.pollSec : 10;
@@ -152,10 +163,21 @@
     const eth = parseFloat(document.getElementById('eth').value);
     const btc = parseFloat(document.getElementById('btc').value);
     if (isNaN(eth) || isNaN(btc)) return;
+    const sym3Raw = document.getElementById('sym3').value.trim().toUpperCase();
+    const emaSymRaw = document.getElementById('emaSymbol').value.trim().toUpperCase();
+    // 校验：集合已加载时，必须是有效 USDT 交易对（避免手填错误导致无行情/无限重连）
+    if (sym3Raw && VALID_USDT.size && !VALID_USDT.has(sym3Raw)) {
+      alert('第三交易对无效或非 USDT 交易对：' + sym3Raw);
+      return;
+    }
+    if (emaSymRaw && VALID_USDT.size && !VALID_USDT.has(emaSymRaw)) {
+      alert('均线交易对无效或非 USDT 交易对：' + emaSymRaw);
+      return;
+    }
     const ec = document.getElementById('emaConfig').value.split(':');
     const ema = {
       enabled: document.getElementById('emaEnabled').checked,
-      symbol: document.getElementById('emaSymbol').value,
+      symbol: emaSymRaw || 'HYPEUSDT',
       interval: ec[0],
       emaPeriod: parseInt(ec[1], 10),
       proximityPct: parseFloat(document.getElementById('emaProx').value),
@@ -164,7 +186,7 @@
     ipcRenderer.send('save-settings', {
       eth, btc,
       autostart: document.getElementById('auto').checked,
-      symbol3: document.getElementById('sym3').value,
+      symbol3: sym3Raw,
       ema,
     });
   };
