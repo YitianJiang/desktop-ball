@@ -1,12 +1,16 @@
 const { ipcRenderer } = require('electron');
 
-// 币安公开数据镜像（不受地域封锁，无需代理）
-const WS_BASE = 'wss://data-stream.binance.vision/stream?streams=';
-const REST_BASE = 'https://data-api.binance.vision/api/v3/ticker/price?symbols=';
+// eth/btc 走现货公开镜像（绕过代理、直连，始终可用）
+const SPOT_WS = 'wss://data-stream.binance.vision/stream?streams=';
+const SPOT_REST = 'https://data-api.binance.vision/api/v3/ticker/price?symbols=';
+// 第三交易对走合约（fstream/fapi），经本地代理（Clash）取数
+const FUT_WS = 'wss://fstream.binance.com/ws/';
+const FUT_REST = 'https://fapi.binance.com/fapi/v1/ticker/price?symbol=';
 
 // 阈值（由 main 通过 'config' 事件下发，可在设置框里改）
 let th = { eth: 2170, btc: 70000 };
-let sym3 = ''; // 第三币符号（大写，空=不显示）
+let sym3 = '';      // 第三交易对（大写，空=不显示）
+let sym3Ws = null;  // 第三交易对的合约 WS
 
 const state = {
   eth: { price: null, armed: true, fired: false },
@@ -24,9 +28,7 @@ ipcRenderer.on('config', (e, c) => {
   if (ns !== sym3) {
     sym3 = ns;
     sym3Row.style.display = sym3 ? 'block' : 'none';
-    // 第三币变化 -> 重建 WS 流（流地址里要带上第三币）
-    if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} }
-    connectWS();
+    connectSym3(); // 第三交易对变化 -> 重建合约 WS 流
   }
 });
 
@@ -39,7 +41,6 @@ function fmtAny(p) {
 }
 
 function onPrice(sym, p) {
-  if (sym === 'sym3') { sym3El.textContent = fmtAny(p); return; } // 第三币只显示，不报警
   const s = state[sym];
   s.price = p;
   const below = p < th[sym];
@@ -60,23 +61,11 @@ function refreshAlert() {
   else if (!any && alertRequested) { alertRequested = false; ipcRenderer.send('alert:off'); }
 }
 
-// ---------- 取数：WebSocket 主通道 + REST 兜底（均随第三币动态变化）----------
-function wsUrl() {
-  const streams = ['ethusdt@ticker', 'btcusdt@ticker'];
-  if (sym3) streams.push(sym3.toLowerCase() + '@ticker');
-  return WS_BASE + streams.join('/');
-}
-function restUrl() {
-  const syms = ['ETHUSDT', 'BTCUSDT'];
-  if (sym3) syms.push(sym3);
-  return REST_BASE + encodeURIComponent(JSON.stringify(syms));
-}
-
+// ---------- 现货 WS（eth/btc）----------
 let ws = null;
 let lastMsg = 0;
-
-function connectWS() {
-  try { ws = new WebSocket(wsUrl()); } catch (e) { scheduleReconnect(); return; }
+function connectSpotWS() {
+  try { ws = new WebSocket(SPOT_WS + 'ethusdt@ticker/btcusdt@ticker'); } catch (e) { scheduleReconnect(); return; }
   ws.onopen = () => { lastMsg = Date.now(); };
   ws.onmessage = (ev) => {
     try {
@@ -86,34 +75,63 @@ function connectWS() {
       const p = parseFloat(d.c);
       if (d.s === 'ETHUSDT') onPrice('eth', p);
       else if (d.s === 'BTCUSDT') onPrice('btc', p);
-      else if (sym3 && d.s === sym3) onPrice('sym3', p);
       lastMsg = Date.now();
     } catch (e) {}
   };
   ws.onclose = () => scheduleReconnect();
   ws.onerror = () => { try { ws.close(); } catch (e) {} };
 }
+function scheduleReconnect() { setTimeout(connectSpotWS, 3000); }
 
-function scheduleReconnect() { setTimeout(connectWS, 3000); }
+// ---------- 合约 WS（第三交易对）----------
+function connectSym3() {
+  if (sym3Ws) { try { sym3Ws.onclose = null; sym3Ws.close(); } catch (e) {} sym3Ws = null; }
+  if (!sym3) return;
+  try { sym3Ws = new WebSocket(FUT_WS + sym3.toLowerCase() + '@ticker'); } catch (e) { scheduleSym3(); return; }
+  sym3Ws.onmessage = (ev) => {
+    try {
+      const m = JSON.parse(ev.data);
+      const p = parseFloat(m.c);
+      if (m.s === sym3 && p) sym3El.textContent = fmtAny(p);
+    } catch (e) {}
+  };
+  sym3Ws.onclose = () => scheduleSym3();
+  sym3Ws.onerror = () => { try { sym3Ws.close(); } catch (e) {} };
+}
+function scheduleSym3() { setTimeout(connectSym3, 3000); }
 
+// ---------- REST 兜底（现货 eth/btc + 合约 sym3）----------
 setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN && Date.now() - lastMsg < 5000) return;
-  fetch(restUrl())
-    .then((r) => r.json())
-    .then((arr) => {
-      if (!Array.isArray(arr)) return;
-      for (const it of arr) {
-        const p = parseFloat(it.price);
-        if (it.symbol === 'ETHUSDT') onPrice('eth', p);
-        else if (it.symbol === 'BTCUSDT') onPrice('btc', p);
-        else if (sym3 && it.symbol === sym3) onPrice('sym3', p);
-      }
-      lastMsg = Date.now();
-    })
-    .catch(() => {});
+  if (!(ws && ws.readyState === WebSocket.OPEN && Date.now() - lastMsg < 5000)) {
+    fetch(SPOT_REST + encodeURIComponent(JSON.stringify(['ETHUSDT', 'BTCUSDT'])))
+      .then((r) => r.json())
+      .then((arr) => {
+        if (!Array.isArray(arr)) return;
+        for (const it of arr) {
+          const p = parseFloat(it.price);
+          if (it.symbol === 'ETHUSDT') onPrice('eth', p);
+          else if (it.symbol === 'BTCUSDT') onPrice('btc', p);
+        }
+        lastMsg = Date.now();
+      })
+      .catch(() => {});
+  }
+  if (sym3) {
+    fetch(FUT_REST + encodeURIComponent(sym3))
+      .then((r) => r.json())
+      .then((j) => { const p = parseFloat(j.price); if (p) sym3El.textContent = fmtAny(p); })
+      .catch(() => {});
+  }
 }, 2000);
 
-connectWS();
+connectSpotWS();
+
+// 代理变更后由 main 触发：重建所有 WS（用新代理重新连接合约流）
+ipcRenderer.on('reload-ws', () => {
+  if (ws) { try { ws.onclose = null; ws.close(); } catch (e) {} }
+  connectSpotWS();
+  connectSym3();
+});
 
 // ---------- 拖动 + 点击打开设置 ----------
 let dragging = false, moved = false, lastX = 0, lastY = 0;

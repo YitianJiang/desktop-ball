@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -12,7 +12,8 @@ const DEFAULT_CFG = {
   eth: 2170,
   btc: 70000,
   autostart: true,
-  symbol3: '', // 第三币：空=不显示；配置后球上加一行实时价（eth/btc 始终显示）
+  symbol3: '', // 第三交易对：空=不显示；配置后球上加一行实时价（eth/btc 始终显示）
+  proxy: '',   // 本地代理（Clash HTTP 端口，如 127.0.0.1:7897）；空=不走代理，合约行情取不到
   ema: { enabled: false, symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5, pollSec: 10 },
 };
 
@@ -23,6 +24,7 @@ function readConfig() {
     btc: DEFAULT_CFG.btc,
     autostart: true,
     symbol3: '',
+    proxy: DEFAULT_CFG.proxy,
     ema: { ...DEFAULT_CFG.ema },
   };
   try {
@@ -33,6 +35,7 @@ function readConfig() {
     if (typeof j.symbol3 === 'string' && j.symbol3) {
       cfg.symbol3 = j.symbol3.toUpperCase().replace(/[^A-Z0-9]/g, '');
     }
+    if (typeof j.proxy === 'string') cfg.proxy = j.proxy.trim();
     if (j.ema && typeof j.ema === 'object') {
       const e = j.ema;
       cfg.ema = {
@@ -60,6 +63,20 @@ function applyAutostart(on) {
     opts.args = [app.getAppPath()];
   }
   try { app.setLoginItemSettings(opts); } catch (e) {}
+}
+// 配置本地代理（Clash 等）。合约(fapi/fstream)行情走代理；现货镜像(data-api/data-stream)绕过代理直连，
+// 保证 eth/btc 始终可用，不受代理开关影响。
+async function applyProxy(proxy) {
+  try {
+    if (proxy) {
+      await session.defaultSession.setProxy({
+        proxyRules: `http=${proxy};https=${proxy}`,
+        proxyBypassList: 'data-api.binance.vision;data-stream.binance.vision',
+      });
+    } else {
+      await session.defaultSession.setProxy({ proxyRules: 'direct://' });
+    }
+  } catch (e) {}
 }
 let cfg = readConfig();
 
@@ -188,14 +205,14 @@ function startEmaMonitor() {
   const limit = Math.min(1000, Math.max(emaPeriod * 2 + 100, 400));
   const tick = async () => {
     try {
-      const klUrl = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(sym)}&interval=${interval}&limit=${limit}`;
+      const klUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${encodeURIComponent(sym)}&interval=${interval}&limit=${limit}`;
       const klRes = await fetch(klUrl, { signal: AbortSignal.timeout(8000) });
       if (!klRes.ok) return;
       const klines = await klRes.json();
       if (!Array.isArray(klines) || klines.length < emaPeriod) return;
       const closes = klines.map((k) => parseFloat(k[4]));
       const ema = computeEMA(closes, emaPeriod);
-      const prUrl = `https://data-api.binance.vision/api/v3/ticker/price?symbol=${encodeURIComponent(sym)}`;
+      const prUrl = `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${encodeURIComponent(sym)}`;
       const prRes = await fetch(prUrl, { signal: AbortSignal.timeout(8000) });
       if (!prRes.ok) return;
       const pr = await prRes.json();
@@ -268,13 +285,14 @@ ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('open-settings', () => openSettings());
 ipcMain.on('settings:close', () => { if (settingsWin) settingsWin.close(); });
 ipcMain.on('ema-alert:dismiss', () => { if (emaAlertWin) { try { emaAlertWin.close(); } catch (e) {} emaAlertWin = null; } });
-ipcMain.on('save-settings', (e, d) => {
+ipcMain.on('save-settings', async (e, d) => {
   const ema = d.ema || {};
   cfg = {
     eth: d.eth,
     btc: d.btc,
     autostart: !!d.autostart,
     symbol3: (typeof d.symbol3 === 'string' && d.symbol3) ? String(d.symbol3).toUpperCase().replace(/[^A-Z0-9]/g, '') : '', // 第三交易对（第三个可配置交易对，仅显示不报警）
+    proxy: (typeof d.proxy === 'string') ? d.proxy.trim() : '',
     ema: {
       enabled: !!ema.enabled,
       symbol: String(ema.symbol || 'HYPEUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT',
@@ -286,10 +304,12 @@ ipcMain.on('save-settings', (e, d) => {
   };
   writeConfig(cfg);
   applyAutostart(cfg.autostart);
+  await applyProxy(cfg.proxy); // 切换代理后，重建 WS / 重启 EMA 才能生效
   startEmaMonitor();
   if (ballWin && ballWin.webContents) {
     ballWin.setSize(84, cfg.symbol3 ? 64 : 44); // 配置第三币时加高一行
     ballWin.webContents.send('config', cfg);
+    ballWin.webContents.send('reload-ws'); // 用新代理重建行情 WS
   }
   if (settingsWin) settingsWin.close();
 });
@@ -300,7 +320,8 @@ ipcMain.on('win:move', (e, delta) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await applyProxy(cfg.proxy); // 先设代理路由（eth/btc 现货绕过、合约走代理），再加载页面
   createBall();
   // 开机自启动：按配置决定（默认开启），写入系统登录项
   applyAutostart(cfg.autostart !== false);

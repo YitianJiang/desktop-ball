@@ -39,8 +39,12 @@
     <input id="btc" type="number" step="any" min="0">
   </div>
   <div class="field">
-    <label>第三交易对（默认不显示；输入或选择某 USDT 交易对后，球上加一行实时价）</label>
+    <label>第三交易对（默认不显示；输入或选择某 USDT 合约交易对后，球上加一行实时价）</label>
     <input id="sym3" list="usdtPairs" type="text" placeholder="如 ENAUSDT / HYPEUSDT" autocomplete="off">
+  </div>
+  <div class="field">
+    <label>本地代理（Clash 端口，如 127.0.0.1:7897；留空则不走代理，合约行情取不到）</label>
+    <input id="proxy" type="text" placeholder="127.0.0.1:7897" autocomplete="off">
   </div>
   <div class="check">
     <input id="auto" type="checkbox">
@@ -53,12 +57,18 @@
     <label>启用（价格接近均线时弹窗告警）</label>
   </div>
   <div class="field">
-    <label>交易对（输入或选择，仅 USDT 交易对）</label>
+    <label>交易对（输入或选择，仅 USDT 合约交易对）</label>
     <input id="emaSymbol" list="usdtPairs" type="text" placeholder="如 HYPEUSDT" autocomplete="off">
   </div>
-  <div class="field">
-    <label>均线配置（K线周期 · 均线周期）</label>
-    <select id="emaConfig"></select>
+  <div class="two">
+    <div class="field">
+      <label>K线周期</label>
+      <input id="emaInterval" type="text" placeholder="如 5m" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>均线周期</label>
+      <input id="emaPeriod" type="text" placeholder="如 7" autocomplete="off">
+    </div>
   </div>
   <div class="two">
     <div class="field">
@@ -78,67 +88,46 @@
   <button class="quit" id="quit">退出程序</button>
   <datalist id="usdtPairs"></datalist>
   <div class="tip">
-    「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
-    「均线接近告警」：后台定时拉取所选交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
+    「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 合约交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
+    「均线接近告警」：后台定时拉取所选合约交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
     例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
-    交易对输入框支持自动补全：输入「ena」会提示「ENAUSDT」等 USDT 交易对。<br>
+    交易对输入框支持自动补全：优先列出币安 U 本位合约 USDT 交易对（输入「ena」会提示「ENAUSDT」）；取不到时退回现货列表。<br>
+    「本地代理」：合约(fapi)行情在国内被墙，需走你本地 Clash 等代理；填 Clash 的 HTTP 代理端口（如 127.0.0.1:7897）。eth/btc 始终走现货镜像、不经代理。<br>
     设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
   </div>
 </div>
 <script>
   const { ipcRenderer } = require('electron');
 
-  // 均线配置：K线周期 · 均线周期（常用组合，合并为一个下拉）
-  const EMA_CONFIGS = [
-    { v: '1m:7',   t: '1分钟 · EMA7' },
-    { v: '3m:15',  t: '3分钟 · EMA15' },
-    { v: '5m:7',   t: '5分钟 · EMA7' },
-    { v: '5m:20',  t: '5分钟 · EMA20' },
-    { v: '15m:20', t: '15分钟 · EMA20' },
-    { v: '15m:50', t: '15分钟 · EMA50' },
-    { v: '30m:30', t: '30分钟 · EMA30' },
-    { v: '1h:20',  t: '1小时 · EMA20' },
-    { v: '1h:50',  t: '1小时 · EMA50' },
-    { v: '1h:120', t: '1小时 · EMA120' },
-    { v: '4h:120', t: '4小时 · EMA120' },
-    { v: '4h:200', t: '4小时 · EMA200' },
-    { v: '1d:200', t: '1日 · EMA200' },
-    { v: '1w:200', t: '1周 · EMA200' },
-  ];
-
-  function fillSelect(sel, items, selected) {
-    sel.innerHTML = '';
-    for (const it of items) {
-      const o = document.createElement('option');
-      o.value = it.v;
-      o.textContent = it.t;
-      if (it.v === selected) o.selected = true;
-      sel.appendChild(o);
-    }
-  }
-
   // 有效 USDT 交易对集合（用于自动补全与保存时校验）。
-  // 数据源：币安现货 exchangeInfo（app 的行情/EMA 均走现货端点 data-api.binance.vision）。
+  // 优先取币安 U 本位合约 exchangeInfo（fapi），取不到再退回现货（data-api）。
   let VALID_USDT = new Set();
 
   async function loadUsdtPairs() {
-    try {
-      const r = await fetch('https://data-api.binance.vision/api/v3/exchangeInfo', { signal: AbortSignal.timeout(10000) });
-      if (!r.ok) return;
-      const j = await r.json();
-      const dl = document.getElementById('usdtPairs');
-      if (!Array.isArray(j.symbols)) return;
-      for (const s of j.symbols) {
-        if (s.status === 'TRADING' && typeof s.symbol === 'string' && s.symbol.endsWith('USDT')) {
-          VALID_USDT.add(s.symbol);
-          const o = document.createElement('option');
-          o.value = s.symbol;
-          dl.appendChild(o);
+    const dl = document.getElementById('usdtPairs');
+    const tryUrl = async (url) => {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        if (!r.ok) return false;
+        const j = await r.json();
+        if (!Array.isArray(j.symbols)) return false;
+        for (const s of j.symbols) {
+          // 合约：排除季度/交割（含下划线，如 BTCUSDT_241227）；现货：直接收 USDT
+          if (s.status === 'TRADING' && typeof s.symbol === 'string' &&
+              s.symbol.endsWith('USDT') && !s.symbol.includes('_')) {
+            if (!VALID_USDT.has(s.symbol)) {
+              VALID_USDT.add(s.symbol);
+              const o = document.createElement('option');
+              o.value = s.symbol;
+              dl.appendChild(o);
+            }
+          }
         }
-      }
-    } catch (e) {
-      // 拉取失败则留空：用户仍可手填，保存时若集合为空则跳过校验
-    }
+        return true;
+      } catch (e) { return false; }
+    };
+    const ok = await tryUrl('https://fapi.binance.com/fapi/v1/exchangeInfo');
+    if (!ok) await tryUrl('https://data-api.binance.vision/api/v3/exchangeInfo');
   }
   loadUsdtPairs();
 
@@ -147,13 +136,11 @@
     document.getElementById('btc').value = cfg.btc;
     if (typeof cfg.autostart === 'boolean') document.getElementById('auto').checked = cfg.autostart;
     document.getElementById('sym3').value = cfg.symbol3 || '';
+    document.getElementById('proxy').value = cfg.proxy || '';
     const ema = cfg.ema || {};
-    fillSelect(
-      document.getElementById('emaConfig'),
-      EMA_CONFIGS,
-      ema.interval && ema.emaPeriod ? ema.interval + ':' + ema.emaPeriod : '5m:7'
-    );
     document.getElementById('emaSymbol').value = ema.symbol || 'HYPEUSDT';
+    document.getElementById('emaInterval').value = ema.interval || '5m';
+    document.getElementById('emaPeriod').value = ema.emaPeriod || 7;
     document.getElementById('emaEnabled').checked = !!ema.enabled;
     document.getElementById('emaProx').value = ema.proximityPct != null ? ema.proximityPct : 0.5;
     document.getElementById('emaPoll').value = ema.pollSec != null ? ema.pollSec : 10;
@@ -165,6 +152,8 @@
     if (isNaN(eth) || isNaN(btc)) return;
     const sym3Raw = document.getElementById('sym3').value.trim().toUpperCase();
     const emaSymRaw = document.getElementById('emaSymbol').value.trim().toUpperCase();
+    const emaInterval = document.getElementById('emaInterval').value.trim().toLowerCase() || '5m';
+    const emaPeriod = parseInt(document.getElementById('emaPeriod').value, 10) || 7;
     // 校验：集合已加载时，必须是有效 USDT 交易对（避免手填错误导致无行情/无限重连）
     if (sym3Raw && VALID_USDT.size && !VALID_USDT.has(sym3Raw)) {
       alert('第三交易对无效或非 USDT 交易对：' + sym3Raw);
@@ -174,12 +163,11 @@
       alert('均线交易对无效或非 USDT 交易对：' + emaSymRaw);
       return;
     }
-    const ec = document.getElementById('emaConfig').value.split(':');
     const ema = {
       enabled: document.getElementById('emaEnabled').checked,
       symbol: emaSymRaw || 'HYPEUSDT',
-      interval: ec[0],
-      emaPeriod: parseInt(ec[1], 10),
+      interval: emaInterval,
+      emaPeriod: emaPeriod,
       proximityPct: parseFloat(document.getElementById('emaProx').value),
       pollSec: parseInt(document.getElementById('emaPoll').value, 10),
     };
@@ -187,6 +175,7 @@
       eth, btc,
       autostart: document.getElementById('auto').checked,
       symbol3: sym3Raw,
+      proxy: document.getElementById('proxy').value.trim(),
       ema,
     });
   };
