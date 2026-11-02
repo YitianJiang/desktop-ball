@@ -15,6 +15,25 @@
   label { display: block; font-size: 12px; opacity: 0.7; margin-bottom: 6px; }
   input, select { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
     border: 1px solid #3a3f4d; background: #11141b; color: #f5f7fa; font-size: 14px; }
+  /* 自动补全下拉：固定定位，避免被窗口滚动裁切；覆盖在输入框正下方 */
+  .ac-wrap { position: relative; }
+  .ac-drop {
+    display: none;
+    position: fixed;
+    z-index: 9999;
+    max-height: 240px;
+    overflow-y: auto;
+    background: #11141b;
+    border: 1px solid #3a3f4d;
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+    padding: 4px 0;
+  }
+  .ac-drop::-webkit-scrollbar { width: 6px; }
+  .ac-drop::-webkit-scrollbar-thumb { background: #3a3f4d; border-radius: 3px; }
+  .ac-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .ac-item:hover, .ac-item.active { background: #2f7df6; color: #fff; }
+  .ac-empty { padding: 8px 10px; font-size: 12px; color: #888; }
   .two { display: flex; gap: 10px; }
   .two > div { flex: 1; }
   .check { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -41,7 +60,10 @@
   </div>
   <div class="field">
     <label>第三交易对（默认不显示；输入或选择某 USDT 合约交易对后，球上加一行实时价）</label>
-    <input id="sym3" list="usdtPairs" type="text" placeholder="如 ENAUSDT / HYPEUSDT" autocomplete="off">
+    <div class="ac-wrap">
+      <input id="sym3" type="text" placeholder="如 ENAUSDT / HYPEUSDT" autocomplete="off">
+      <div class="ac-drop" id="drop-sym3"></div>
+    </div>
   </div>
   <div class="field">
     <label>本地代理（Clash 端口，如 127.0.0.1:7897；留空则不走代理，合约行情取不到）</label>
@@ -59,7 +81,10 @@
   </div>
   <div class="field">
     <label>交易对（输入或选择，仅 USDT 合约交易对）</label>
-    <input id="emaSymbol" list="usdtPairs" type="text" placeholder="如 HYPEUSDT" autocomplete="off">
+    <div class="ac-wrap">
+      <input id="emaSymbol" type="text" placeholder="如 HYPEUSDT" autocomplete="off">
+      <div class="ac-drop" id="drop-emaSymbol"></div>
+    </div>
   </div>
   <div class="two">
     <div class="field">
@@ -87,13 +112,12 @@
     <button class="save" id="save">保存</button>
   </div>
   <button class="quit" id="quit">退出程序</button>
-  <datalist id="usdtPairs"></datalist>
   <div id="pairHint" class="tip"></div>
   <div class="tip">
     「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 合约交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
     「均线接近告警」：后台定时拉取所选合约交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
     例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
-    交易对输入框支持自动补全：列出币安 U 本位合约 USDT 永续交易对（输入「ena」会提示「ENAUSDT」）；仅合约，不列现货。<br>
+    交易对输入框支持自动补全：输入「bnb」会提示「BNBUSDT」（大小写不敏感、子串匹配）；仅合约，不列现货。<br>
     「本地代理」：合约(fapi)行情在国内被墙，需走你本地 Clash 等代理；填 Clash 的 HTTP 代理端口（如 127.0.0.1:7897）。eth/btc 始终走现货镜像、不经代理。<br>
     设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
   </div>
@@ -108,22 +132,111 @@
     // 通过主进程拉取合约交易对列表（主进程走 session 代理，渲染进程 fetch 不吃代理）
     ipcRenderer.send('get-usdt-pairs');
   }
-  ipcRenderer.on('usdt-pairs', (e, list) => {
-    const dl = document.getElementById('usdtPairs');
-    dl.innerHTML = '';
-    VALID_USDT = new Set(list || []);
-    for (const sym of VALID_USDT) {
-      const o = document.createElement('option');
-      o.value = sym;
-      dl.appendChild(o);
+
+  // 自定义自动补全：不依赖原生 <datalist>（Electron 原生 datalist 下拉常不弹、大小写匹配不稳）。
+  // 行为：大小写不敏感子串匹配（"bnb" → "BNBUSDT"）；命中优先以"前缀匹配"排前；最多 30 条。
+  function setupAutocomplete(inputEl, dropEl) {
+    let activeIdx = -1;
+    let items = [];
+
+    function render() {
+      const q = inputEl.value.trim().toUpperCase();
+      dropEl.innerHTML = '';
+      activeIdx = -1;
+      if (VALID_USDT.size === 0) { dropEl.style.display = 'none'; return; }
+      if (q === '') { dropEl.style.display = 'none'; return; }
+      const matched = [];
+      for (const sym of VALID_USDT) {
+        if (sym.includes(q)) matched.push(sym);
+      }
+      // 前缀匹配排前，其余保持原顺序；封顶 30 条
+      matched.sort((a, b) => {
+        const pa = a.startsWith(q) ? 0 : 1;
+        const pb = b.startsWith(q) ? 0 : 1;
+        if (pa !== pb) return pa - pb;
+        return 0;
+      });
+      const top = matched.slice(0, 30);
+      if (top.length === 0) {
+        const e = document.createElement('div');
+        e.className = 'ac-empty';
+        e.textContent = '无匹配交易对';
+        dropEl.appendChild(e);
+        position();
+        dropEl.style.display = 'block';
+        return;
+      }
+      items = top;
+      top.forEach((sym, i) => {
+        const d = document.createElement('div');
+        d.className = 'ac-item';
+        d.textContent = sym;
+        d.dataset.idx = i;
+        // mousedown 先于 blur 触发，preventDefault 阻止输入框失焦，保证点击能选中
+        d.addEventListener('mousedown', (ev) => {
+          ev.preventDefault();
+          inputEl.value = sym;
+          dropEl.style.display = 'none';
+        });
+        dropEl.appendChild(d);
+      });
+      position();
+      dropEl.style.display = 'block';
     }
+
+    function position() {
+      const r = inputEl.getBoundingClientRect();
+      dropEl.style.left = r.left + 'px';
+      dropEl.style.top = (r.bottom + 2) + 'px';
+      dropEl.style.width = r.width + 'px';
+    }
+
+    function hide() { dropEl.style.display = 'none'; }
+
+    inputEl.addEventListener('input', render);
+    inputEl.addEventListener('focus', () => { if (inputEl.value.trim() !== '') render(); });
+    inputEl.addEventListener('blur', () => { setTimeout(hide, 120); });
+    inputEl.addEventListener('keydown', (e) => {
+      if (dropEl.style.display !== 'block' || items.length === 0) return;
+      const nodeList = dropEl.querySelectorAll('.ac-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        activeIdx = (activeIdx + 1) % items.length;
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        activeIdx = (activeIdx - 1 + items.length) % items.length;
+      } else if (e.key === 'Enter') {
+        if (activeIdx >= 0 && nodeList[activeIdx]) {
+          e.preventDefault();
+          inputEl.value = items[activeIdx];
+          hide();
+        }
+        return;
+      } else if (e.key === 'Escape') {
+        hide();
+        return;
+      } else {
+        return;
+      }
+      nodeList.forEach((n, i) => n.classList.toggle('active', i === activeIdx));
+      if (nodeList[activeIdx]) nodeList[activeIdx].scrollIntoView({ block: 'nearest' });
+    });
+
+    return { render, hide };
+  }
+
+  const acSym3 = setupAutocomplete(document.getElementById('sym3'), document.getElementById('drop-sym3'));
+  const acEma = setupAutocomplete(document.getElementById('emaSymbol'), document.getElementById('drop-emaSymbol'));
+
+  ipcRenderer.on('usdt-pairs', (e, list) => {
+    VALID_USDT = new Set(list || []);
     // 加载失败（代理没通 / Clash 没起）→ 明确提示，不再用现货列表冒充
     const hint = document.getElementById('pairHint');
     if (VALID_USDT.size === 0) {
       hint.textContent = '合约交易对列表加载失败：请确认本地代理(Clash)已运行且端口正确（默认 127.0.0.1:7897），保存后重试。';
       hint.style.color = '#e0a23c';
     } else {
-      hint.textContent = '已加载 ' + VALID_USDT.size + ' 个 U 本位合约交易对（仅合约，经本地代理）。';
+      hint.textContent = '已加载 ' + VALID_USDT.size + ' 个 U 本位合约交易对（仅合约，经本地代理）。输入如 bnb/ena 即出提示。';
       hint.style.color = 'rgba(245,247,250,0.5)';
     }
   });
