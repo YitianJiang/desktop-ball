@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>均线接近告警</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Arial, sans-serif; }
+  body { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  #card {
+    width: 280px; padding: 18px 20px; box-sizing: border-box;
+    border-radius: 14px; background: rgba(18,20,28,0.92);
+    border: 1px solid #3a3f4d; color: #f5f7fa;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 6px;
+    background: #e05656; color: #fff; margin-bottom: 10px; }
+  h1 { font-size: 15px; margin: 0 0 14px; font-weight: 600; }
+  .row { display: flex; justify-content: space-between; font-size: 13px; margin: 7px 0; }
+  .row .k { opacity: 0.65; }
+  .row .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .hl { color: #ffd166; }
+  .tip { font-size: 11px; opacity: 0.5; margin-top: 14px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="card">
+  <span class="badge">均线接近告警</span>
+  <h1 id="title">价格接近均线</h1>
+  <div class="row"><span class="k">交易对</span><span class="v" id="symbol">-</span></div>
+  <div class="row"><span class="k">K线周期</span><span class="v" id="interval">-</span></div>
+  <div class="row"><span class="k">均线</span><span class="v" id="emaName">-</span></div>
+  <div class="row"><span class="k">当前价格</span><span class="v" id="price">-</span></div>
+  <div class="row"><span class="k" id="emaLabel">EMA 值</span><span class="v hl" id="emaVal">-</span></div>
+  <div class="row"><span class="k">偏离幅度</span><span class="v hl" id="dist">-</span></div>
+  <div class="tip">点击任意处关闭</div>
+</div>
+<script>
+  const { ipcRenderer } = require('electron');
+  function fmt(n) {
+    if (typeof n !== 'number' || isNaN(n)) return '-';
+    if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (n >= 1) return n.toFixed(3);
+    return n.toFixed(6);
+  }
+  function render(d) {
+    if (!d) return;
+    document.getElementById('title').textContent = `${d.symbol} 接近 EMA${d.emaPeriod}`;
+    document.getElementById('symbol').textContent = d.symbol;
+    document.getElementById('interval').textContent = d.interval;
+    document.getElementById('emaName').textContent = `EMA${d.emaPeriod}`;
+    document.getElementById('price').textContent = fmt(d.price);
+    document.getElementById('emaVal').textContent = fmt(d.ema);
+    const above = d.price >= d.ema;
+    document.getElementById('dist').textContent = `${above ? '+' : '-'}${d.distPct.toFixed(3)}% ${above ? '(上方)' : '(下方)'}`;
+  }
+  ipcRenderer.on('ema-alert:data', (e, d) => render(d));
+  document.body.addEventListener('click', () => ipcRenderer.send('ema-alert:dismiss'));
+  document.body.addEventListener('contextmenu', (e) => e.preventDefault());
+</script>
+</body>
+</html>

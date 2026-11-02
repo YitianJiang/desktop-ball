@@ -6,17 +6,24 @@
 <style>
   html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Arial, sans-serif;
     background: #1b1e27; color: #f5f7fa; }
-  .box { padding: 18px 20px; }
+  .box { padding: 18px 20px; max-height: 100vh; overflow-y: auto; }
   h2 { font-size: 15px; margin: 0 0 14px; font-weight: 600; }
-  .field { margin-bottom: 14px; }
+  h3 { font-size: 13px; margin: 18px 0 10px; font-weight: 600; opacity: 0.9;
+    border-top: 1px solid #2c303c; padding-top: 14px; }
+  .field { margin-bottom: 12px; }
   label { display: block; font-size: 12px; opacity: 0.7; margin-bottom: 6px; }
-  input { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+  input, select { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
     border: 1px solid #3a3f4d; background: #11141b; color: #f5f7fa; font-size: 14px; }
-  .btns { display: flex; gap: 10px; margin-top: 4px; }
+  .two { display: flex; gap: 10px; }
+  .two > div { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .check input { width: auto; padding: 0; }
+  .check label { margin: 0; opacity: 1; font-size: 13px; }
+  .btns { display: flex; gap: 10px; margin-top: 16px; }
   button { flex: 1; padding: 9px; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; }
   .save { background: #2f7df6; color: #fff; }
   .cancel { background: #333845; color: #cfd3dc; }
-  .quit { background: transparent; color: #e05656; border: 1px solid #5a2a2a; margin-top: 10px; }
+  .quit { background: transparent; color: #e05656; border: 1px solid #5a2a2a; margin-top: 10px; width: 100%; }
   .tip { font-size: 11px; opacity: 0.5; margin-top: 12px; line-height: 1.5; }
 </style>
 </head>
@@ -31,16 +38,73 @@
     <label>BTC 低于（USDT）触发报警</label>
     <input id="btc" type="number" step="any" min="0">
   </div>
-  <div class="field" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-    <input id="auto" type="checkbox" style="width:auto; padding:0;">
-    <label style="margin:0; opacity:1; font-size:13px;">开机自动启动</label>
+  <div class="check">
+    <input id="auto" type="checkbox">
+    <label>开机自动启动</label>
   </div>
+
+  <h3>均线接近告警</h3>
+  <div class="check">
+    <input id="emaEnabled" type="checkbox">
+    <label>启用（价格接近均线时弹窗告警）</label>
+  </div>
+  <div class="field">
+    <label>交易对（如 HYPEUSDT）</label>
+    <input id="emaSymbol" type="text" placeholder="HYPEUSDT" style="text-transform:uppercase;">
+  </div>
+  <div class="two">
+    <div class="field">
+      <label>K线周期</label>
+      <select id="emaInterval">
+        <option value="1m">1 分钟</option>
+        <option value="3m">3 分钟</option>
+        <option value="5m">5 分钟</option>
+        <option value="15m">15 分钟</option>
+        <option value="30m">30 分钟</option>
+        <option value="1h">1 小时</option>
+        <option value="4h">4 小时</option>
+        <option value="1d">1 日</option>
+        <option value="1w">1 周</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>均线周期</label>
+      <select id="emaPeriod">
+        <option value="7">EMA 7</option>
+        <option value="10">EMA 10</option>
+        <option value="15">EMA 15</option>
+        <option value="20">EMA 20</option>
+        <option value="30">EMA 30</option>
+        <option value="40">EMA 40</option>
+        <option value="50">EMA 50</option>
+        <option value="72">EMA 72</option>
+        <option value="120">EMA 120</option>
+        <option value="162">EMA 162</option>
+        <option value="200">EMA 200</option>
+      </select>
+    </div>
+  </div>
+  <div class="two">
+    <div class="field">
+      <label>接近幅度（%）</label>
+      <input id="emaProx" type="number" step="any" min="0.01" value="0.5">
+    </div>
+    <div class="field">
+      <label>检查间隔（秒）</label>
+      <input id="emaPoll" type="number" step="1" min="3" value="10">
+    </div>
+  </div>
+
   <div class="btns">
     <button class="cancel" id="cancel">取消</button>
     <button class="save" id="save">保存</button>
   </div>
   <button class="quit" id="quit">退出程序</button>
-  <div class="tip">设置后实时生效并自动保存，重启后仍然保留。<br>单击小球可再次打开本设置；退出请点上面的「退出程序」。</div>
+  <div class="tip">
+    「均线接近告警」：后台定时拉取该交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
+    例如 HYPEUSDT / 5分钟 / EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
+    设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
+  </div>
 </div>
 <script>
   const { ipcRenderer } = require('electron');
@@ -48,13 +112,28 @@
     document.getElementById('eth').value = cfg.eth;
     document.getElementById('btc').value = cfg.btc;
     if (typeof cfg.autostart === 'boolean') document.getElementById('auto').checked = cfg.autostart;
+    const ema = cfg.ema || {};
+    document.getElementById('emaEnabled').checked = !!ema.enabled;
+    document.getElementById('emaSymbol').value = ema.symbol || 'HYPEUSDT';
+    if (ema.interval) document.getElementById('emaInterval').value = ema.interval;
+    if (ema.emaPeriod) document.getElementById('emaPeriod').value = String(ema.emaPeriod);
+    document.getElementById('emaProx').value = ema.proximityPct != null ? ema.proximityPct : 0.5;
+    document.getElementById('emaPoll').value = ema.pollSec != null ? ema.pollSec : 10;
   });
   document.getElementById('save').onclick = () => {
     const eth = parseFloat(document.getElementById('eth').value);
     const btc = parseFloat(document.getElementById('btc').value);
     if (isNaN(eth) || isNaN(btc)) return;
     const autostart = document.getElementById('auto').checked;
-    ipcRenderer.send('save-settings', { eth, btc, autostart });
+    const ema = {
+      enabled: document.getElementById('emaEnabled').checked,
+      symbol: document.getElementById('emaSymbol').value.trim(),
+      interval: document.getElementById('emaInterval').value,
+      emaPeriod: parseInt(document.getElementById('emaPeriod').value, 10),
+      proximityPct: parseFloat(document.getElementById('emaProx').value),
+      pollSec: parseInt(document.getElementById('emaPoll').value, 10),
+    };
+    ipcRenderer.send('save-settings', { eth, btc, autostart, ema });
   };
   document.getElementById('cancel').onclick = () => ipcRenderer.send('settings:close');
   document.getElementById('quit').onclick = () => ipcRenderer.send('app:quit');
