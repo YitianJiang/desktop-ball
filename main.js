@@ -12,6 +12,7 @@ const DEFAULT_CFG = {
   eth: 2170,
   btc: 70000,
   autostart: true,
+  symbol3: '', // 第三币：空=不显示；配置后球上加一行实时价（eth/btc 始终显示）
   ema: { enabled: false, symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5, pollSec: 10 },
 };
 
@@ -21,6 +22,7 @@ function readConfig() {
     eth: DEFAULT_CFG.eth,
     btc: DEFAULT_CFG.btc,
     autostart: true,
+    symbol3: '',
     ema: { ...DEFAULT_CFG.ema },
   };
   try {
@@ -28,6 +30,9 @@ function readConfig() {
     if (typeof j.eth === 'number') cfg.eth = j.eth;
     if (typeof j.btc === 'number') cfg.btc = j.btc;
     cfg.autostart = j.autostart === false ? false : true;
+    if (typeof j.symbol3 === 'string' && j.symbol3) {
+      cfg.symbol3 = j.symbol3.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    }
     if (j.ema && typeof j.ema === 'object') {
       const e = j.ema;
       cfg.ema = {
@@ -79,6 +84,7 @@ function createBall() {
   ballWin.setSkipTaskbar(true); // 加固 1：构造后立即设
   ballWin.loadFile(path.join(__dirname, 'index.html'));
   ballWin.once('ready-to-show', () => {
+    ballWin.setSize(84, cfg.symbol3 ? 64 : 44); // 配置第三币时加高一行
     ballWin.setSkipTaskbar(true); // 加固 2：显示前最后一刻再设，规避 Windows 首个窗口 skipTaskbar 失效
     ballWin.show();
     ballWin.setAlwaysOnTop(true, 'screen-saver');
@@ -129,7 +135,7 @@ function openSettings() {
   if (settingsWin) { try { settingsWin.focus(); } catch (e) {} return; }
   settingsWin = new BrowserWindow({
     width: 320,
-    height: 520,
+    height: 580,
     frame: false,
     alwaysOnTop: true,
     resizable: false,
@@ -268,6 +274,7 @@ ipcMain.on('save-settings', (e, d) => {
     eth: d.eth,
     btc: d.btc,
     autostart: !!d.autostart,
+    symbol3: (typeof d.symbol3 === 'string' && d.symbol3) ? String(d.symbol3).toUpperCase().replace(/[^A-Z0-9]/g, '') : '',
     ema: {
       enabled: !!ema.enabled,
       symbol: String(ema.symbol || 'HYPEUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT',
@@ -280,7 +287,10 @@ ipcMain.on('save-settings', (e, d) => {
   writeConfig(cfg);
   applyAutostart(cfg.autostart);
   startEmaMonitor();
-  if (ballWin && ballWin.webContents) ballWin.webContents.send('config', cfg);
+  if (ballWin && ballWin.webContents) {
+    ballWin.setSize(84, cfg.symbol3 ? 64 : 44); // 配置第三币时加高一行
+    ballWin.webContents.send('config', cfg);
+  }
   if (settingsWin) settingsWin.close();
 });
 ipcMain.on('win:move', (e, delta) => {

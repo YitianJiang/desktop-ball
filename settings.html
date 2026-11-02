@@ -38,6 +38,10 @@
     <label>BTC 低于（USDT）触发报警</label>
     <input id="btc" type="number" step="any" min="0">
   </div>
+  <div class="field">
+    <label>第三币（默认不显示；下拉选择后在球上加一行实时价）</label>
+    <select id="sym3"></select>
+  </div>
   <div class="check">
     <input id="auto" type="checkbox">
     <label>开机自动启动</label>
@@ -49,40 +53,12 @@
     <label>启用（价格接近均线时弹窗告警）</label>
   </div>
   <div class="field">
-    <label>交易对（如 HYPEUSDT）</label>
-    <input id="emaSymbol" type="text" placeholder="HYPEUSDT" style="text-transform:uppercase;">
+    <label>交易对（下拉选择）</label>
+    <select id="emaSymbol"></select>
   </div>
-  <div class="two">
-    <div class="field">
-      <label>K线周期</label>
-      <select id="emaInterval">
-        <option value="1m">1 分钟</option>
-        <option value="3m">3 分钟</option>
-        <option value="5m">5 分钟</option>
-        <option value="15m">15 分钟</option>
-        <option value="30m">30 分钟</option>
-        <option value="1h">1 小时</option>
-        <option value="4h">4 小时</option>
-        <option value="1d">1 日</option>
-        <option value="1w">1 周</option>
-      </select>
-    </div>
-    <div class="field">
-      <label>均线周期</label>
-      <select id="emaPeriod">
-        <option value="7">EMA 7</option>
-        <option value="10">EMA 10</option>
-        <option value="15">EMA 15</option>
-        <option value="20">EMA 20</option>
-        <option value="30">EMA 30</option>
-        <option value="40">EMA 40</option>
-        <option value="50">EMA 50</option>
-        <option value="72">EMA 72</option>
-        <option value="120">EMA 120</option>
-        <option value="162">EMA 162</option>
-        <option value="200">EMA 200</option>
-      </select>
-    </div>
+  <div class="field">
+    <label>均线配置（K线周期 · 均线周期）</label>
+    <select id="emaConfig"></select>
   </div>
   <div class="two">
     <div class="field">
@@ -101,39 +77,96 @@
   </div>
   <button class="quit" id="quit">退出程序</button>
   <div class="tip">
-    「均线接近告警」：后台定时拉取该交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
-    例如 HYPEUSDT / 5分钟 / EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
+    「第三币」：ETH、BTC 始终显示，第三币默认不显示，下拉选某个交易对后球上会多出一行实时价（纯数字、无标签）。<br>
+    「均线接近告警」：后台定时拉取所选交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
+    例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
     设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
   </div>
 </div>
 <script>
   const { ipcRenderer } = require('electron');
+
+  // 常见 USDT 永续交易对（用于「第三币」与「均线交易对」下拉）
+  const SYMBOLS = ['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX','LINK','DOT','MATIC','LTC',
+    'TRX','NEAR','ATOM','UNI','AAVE','AR','OP','APT','SUI','TIA','SEI','INJ','HYPE','PEPE','WLD',
+    'FET','RNDR','ETC','BCH','FIL','ICP','HBAR','VET','ALGO','EOS','XLM','XTZ','KAVA','RUNE','GRT',
+    'CHZ','ENJ','SAND','MANA','AXS','THETA','FTM','CRV','LDO','MKR','SNX','COMP','YFI','UMA','BAL',
+    'ZRX','1INCH','DYDX','GMX','PERP','KSM','FLOW','EGLD','ZIL','BAT','ZEC','DASH','XMR'];
+
+  // 均线配置：K线周期 · 均线周期（常用组合，合并为一个下拉）
+  const EMA_CONFIGS = [
+    { v: '1m:7',   t: '1分钟 · EMA7' },
+    { v: '3m:15',  t: '3分钟 · EMA15' },
+    { v: '5m:7',   t: '5分钟 · EMA7' },
+    { v: '5m:20',  t: '5分钟 · EMA20' },
+    { v: '15m:20', t: '15分钟 · EMA20' },
+    { v: '15m:50', t: '15分钟 · EMA50' },
+    { v: '30m:30', t: '30分钟 · EMA30' },
+    { v: '1h:20',  t: '1小时 · EMA20' },
+    { v: '1h:50',  t: '1小时 · EMA50' },
+    { v: '1h:120', t: '1小时 · EMA120' },
+    { v: '4h:120', t: '4小时 · EMA120' },
+    { v: '4h:200', t: '4小时 · EMA200' },
+    { v: '1d:200', t: '1日 · EMA200' },
+    { v: '1w:200', t: '1周 · EMA200' },
+  ];
+
+  function fillSelect(sel, items, selected) {
+    sel.innerHTML = '';
+    for (const it of items) {
+      const o = document.createElement('option');
+      o.value = it.v;
+      o.textContent = it.t;
+      if (it.v === selected) o.selected = true;
+      sel.appendChild(o);
+    }
+  }
+
+  // 第三币下拉：首项「不显示」，且排除 ETH/BTC（避免与固定两币重复）
+  fillSelect(
+    document.getElementById('sym3'),
+    [{ v: '', t: '不显示' }].concat(
+      SYMBOLS.filter((s) => s !== 'ETH' && s !== 'BTC').map((s) => ({ v: s + 'USDT', t: s }))
+    ),
+    ''
+  );
+
   ipcRenderer.on('config', (e, cfg) => {
     document.getElementById('eth').value = cfg.eth;
     document.getElementById('btc').value = cfg.btc;
     if (typeof cfg.autostart === 'boolean') document.getElementById('auto').checked = cfg.autostart;
+    document.getElementById('sym3').value = cfg.symbol3 || '';
     const ema = cfg.ema || {};
+    fillSelect(document.getElementById('emaSymbol'), SYMBOLS.map((s) => ({ v: s + 'USDT', t: s })), ema.symbol || 'HYPEUSDT');
+    fillSelect(
+      document.getElementById('emaConfig'),
+      EMA_CONFIGS,
+      ema.interval && ema.emaPeriod ? ema.interval + ':' + ema.emaPeriod : '5m:7'
+    );
     document.getElementById('emaEnabled').checked = !!ema.enabled;
-    document.getElementById('emaSymbol').value = ema.symbol || 'HYPEUSDT';
-    if (ema.interval) document.getElementById('emaInterval').value = ema.interval;
-    if (ema.emaPeriod) document.getElementById('emaPeriod').value = String(ema.emaPeriod);
     document.getElementById('emaProx').value = ema.proximityPct != null ? ema.proximityPct : 0.5;
     document.getElementById('emaPoll').value = ema.pollSec != null ? ema.pollSec : 10;
   });
+
   document.getElementById('save').onclick = () => {
     const eth = parseFloat(document.getElementById('eth').value);
     const btc = parseFloat(document.getElementById('btc').value);
     if (isNaN(eth) || isNaN(btc)) return;
-    const autostart = document.getElementById('auto').checked;
+    const ec = document.getElementById('emaConfig').value.split(':');
     const ema = {
       enabled: document.getElementById('emaEnabled').checked,
-      symbol: document.getElementById('emaSymbol').value.trim(),
-      interval: document.getElementById('emaInterval').value,
-      emaPeriod: parseInt(document.getElementById('emaPeriod').value, 10),
+      symbol: document.getElementById('emaSymbol').value,
+      interval: ec[0],
+      emaPeriod: parseInt(ec[1], 10),
       proximityPct: parseFloat(document.getElementById('emaProx').value),
       pollSec: parseInt(document.getElementById('emaPoll').value, 10),
     };
-    ipcRenderer.send('save-settings', { eth, btc, autostart, ema });
+    ipcRenderer.send('save-settings', {
+      eth, btc,
+      autostart: document.getElementById('auto').checked,
+      symbol3: document.getElementById('sym3').value,
+      ema,
+    });
   };
   document.getElementById('cancel').onclick = () => ipcRenderer.send('settings:close');
   document.getElementById('quit').onclick = () => ipcRenderer.send('app:quit');
