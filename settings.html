@@ -6,11 +6,11 @@
 <style>
   html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Arial, sans-serif;
     background: #1b1e27; color: #f5f7fa; }
-  .box { padding: 18px 20px; max-height: 100vh; overflow-y: auto; }
+  .box { padding: 16px 18px; max-height: 100vh; overflow-y: auto; }
   .box::-webkit-scrollbar { display: none; }  /* 去掉右侧滚动条（滚轮仍可滚动） */
-  h2 { font-size: 15px; margin: 0 0 14px; font-weight: 600; }
-  h3 { font-size: 13px; margin: 18px 0 10px; font-weight: 600; opacity: 0.9;
-    border-top: 1px solid #2c303c; padding-top: 14px; }
+  h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+  h3 { font-size: 13px; margin: 16px 0 10px; font-weight: 600; opacity: 0.9;
+    border-top: 1px solid #2c303c; padding-top: 12px; }
   .field { margin-bottom: 12px; }
   label { display: block; font-size: 12px; opacity: 0.7; margin-bottom: 6px; }
   input, select { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
@@ -48,65 +48,157 @@
   .reload-btn { width: 100%; margin-top: 8px; padding: 7px; border: 1px solid #3a3f4d; border-radius: 8px;
     background: #222633; color: #9db4e0; font-size: 12px; cursor: pointer; }
   .reload-btn:hover { background: #2a3142; }
+  /* tab 栏 */
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .tab { flex: 1; padding: 8px 4px; text-align: center; font-size: 12px; cursor: pointer;
+    border-radius: 8px; background: #222633; color: #9aa3b2; border: 1px solid transparent; user-select: none; }
+  .tab.active { background: #2f7df6; color: #fff; border-color: #2f7df6; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  #mockProgress b { color: #ffd166; }
 </style>
 </head>
 <body>
 <div class="box">
   <h2>价格告警设置</h2>
-  <div class="field">
-    <label>ETH 低于（USDT）触发报警</label>
-    <input id="eth" type="number" step="any" min="0">
-  </div>
-  <div class="field">
-    <label>BTC 低于（USDT）触发报警</label>
-    <input id="btc" type="number" step="any" min="0">
-  </div>
-  <div class="field">
-    <label>第三交易对（默认不显示；输入或选择某 USDT 合约交易对后，球上加一行实时价）</label>
-    <div class="ac-wrap">
-      <input id="sym3" type="text" placeholder="如 ENAUSDT / HYPEUSDT" autocomplete="off">
-      <div class="ac-drop" id="drop-sym3"></div>
-    </div>
-  </div>
-  <div class="field">
-    <label>本地代理（Clash 端口，如 127.0.0.1:7897；留空则不走代理，合约行情取不到）</label>
-    <input id="proxy" type="text" placeholder="127.0.0.1:7897" autocomplete="off">
-  </div>
-  <div class="check">
-    <input id="auto" type="checkbox">
-    <label>开机自动启动</label>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="basic">价格与告警</div>
+    <div class="tab" data-tab="ema">均线告警</div>
+    <div class="tab" data-tab="mock">模拟源</div>
   </div>
 
-  <h3>均线接近告警</h3>
-  <div class="check">
-    <input id="emaEnabled" type="checkbox">
-    <label>启用（价格接近均线时弹窗告警）</label>
-  </div>
-  <div class="field">
-    <label>交易对（输入或选择，仅 USDT 合约交易对）</label>
-    <div class="ac-wrap">
-      <input id="emaSymbol" type="text" placeholder="如 HYPEUSDT" autocomplete="off">
-      <div class="ac-drop" id="drop-emaSymbol"></div>
+  <!-- ============ Tab 1：价格与告警 ============ -->
+  <div class="panel active" id="panel-basic">
+    <div class="field">
+      <label>ETH 低于（USDT）触发报警</label>
+      <input id="eth" type="number" step="any" min="0">
+    </div>
+    <div class="field">
+      <label>BTC 低于（USDT）触发报警</label>
+      <input id="btc" type="number" step="any" min="0">
+    </div>
+    <div class="field">
+      <label>第三交易对（默认不显示；输入或选择某 USDT 合约交易对后，球上加一行实时价）</label>
+      <div class="ac-wrap">
+        <input id="sym3" type="text" placeholder="如 ENAUSDT / HYPEUSDT" autocomplete="off">
+        <div class="ac-drop" id="drop-sym3"></div>
+      </div>
+    </div>
+    <div class="field">
+      <label>本地代理（Clash 端口，如 127.0.0.1:7897；留空则不走代理，合约行情取不到）</label>
+      <input id="proxy" type="text" placeholder="127.0.0.1:7897" autocomplete="off">
+    </div>
+    <div class="check">
+      <input id="auto" type="checkbox">
+      <label>开机自动启动</label>
+    </div>
+    <div id="pairHint" class="tip"></div>
+    <button id="reloadPairs" class="reload-btn">重试加载合约列表</button>
+    <div class="tip">
+      「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 合约交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
+      「本地代理」：合约(fapi)行情在国内被墙，需走你本地 Clash 等代理；填 Clash 的 HTTP 代理端口（如 127.0.0.1:7897）。eth/btc 始终走现货镜像、不经代理。<br>
+      交易对输入框支持自动补全：输入「bnb」会提示「BNBUSDT」（大小写不敏感、子串匹配）。优先用币安合约列表；合约列表拉不到（多为代理节点地区被 Binance 451 限制）时，自动用现货列表兜底，主流对仍可用；点「重试加载」可在调好代理后重拉合约列表。<br>
+      单击小球可再次打开本设置。
     </div>
   </div>
-  <div class="two">
-    <div class="field">
-      <label>K线周期</label>
-      <input id="emaInterval" type="text" placeholder="如 5m" autocomplete="off">
+
+  <!-- ============ Tab 2：均线告警 ============ -->
+  <div class="panel" id="panel-ema">
+    <div class="check">
+      <input id="emaEnabled" type="checkbox">
+      <label>启用（价格接近均线时弹窗告警）</label>
     </div>
     <div class="field">
-      <label>均线周期</label>
-      <input id="emaPeriod" type="text" placeholder="如 7" autocomplete="off">
+      <label>交易对（输入或选择，仅 USDT 合约交易对）</label>
+      <div class="ac-wrap">
+        <input id="emaSymbol" type="text" placeholder="如 HYPEUSDT" autocomplete="off">
+        <div class="ac-drop" id="drop-emaSymbol"></div>
+      </div>
+    </div>
+    <div class="two">
+      <div class="field">
+        <label>K线周期</label>
+        <input id="emaInterval" type="text" placeholder="如 5m" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>均线周期</label>
+        <input id="emaPeriod" type="text" placeholder="如 7" autocomplete="off">
+      </div>
+    </div>
+    <div class="two">
+      <div class="field">
+        <label>接近幅度（%）</label>
+        <input id="emaProx" type="number" step="any" min="0.01" value="0.5">
+      </div>
+      <div class="field">
+        <label>检查间隔（秒）</label>
+        <input id="emaPoll" type="number" step="1" min="3" value="10">
+      </div>
+    </div>
+    <div class="tip">
+      「均线接近告警」：后台定时拉取所选合约交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
+      例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
+      检查间隔仅对「真实行情」数据源生效；改用「模拟源」（见下一页）时，回放速度由模拟源页控制。<br>
+      若想用回放/演示数据测试本告警，请到「模拟源」页勾选「启用模拟数据源」并设置回放参数。
     </div>
   </div>
-  <div class="two">
-    <div class="field">
-      <label>接近幅度（%）</label>
-      <input id="emaProx" type="number" step="any" min="0.01" value="0.5">
+
+  <!-- ============ Tab 3：模拟源 ============ -->
+  <div class="panel" id="panel-mock">
+    <div class="check">
+      <input id="mockEnabled" type="checkbox">
+      <label>启用模拟数据源（均线告警改用回放数据，而不是真实行情）</label>
     </div>
     <div class="field">
-      <label>检查间隔（秒）</label>
-      <input id="emaPoll" type="number" step="1" min="3" value="10">
+      <label>数据模式</label>
+      <select id="mockMode">
+        <option value="history">历史回放（拉指定时间段的真实 K 线）</option>
+        <option value="demo">内置演示（无需联网的合成数据）</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>数据范围</label>
+      <select id="mockRangeType">
+        <option value="recent">最近 N 根</option>
+        <option value="range">指定时间段</option>
+      </select>
+    </div>
+    <div class="field" id="row-lookback">
+      <label>回看根数（最近 N 根 K 线）</label>
+      <input id="mockLookback" type="number" min="50" value="300">
+    </div>
+    <div id="row-range" style="display:none">
+      <div class="field">
+        <label>起始时间</label>
+        <input id="mockStart" type="datetime-local">
+      </div>
+      <div class="field">
+        <label>结束时间</label>
+        <input id="mockEnd" type="datetime-local">
+      </div>
+    </div>
+    <div class="two">
+      <div class="field">
+        <label>回放速度（每根毫秒）</label>
+        <input id="mockSpeed" type="number" min="20" value="200">
+      </div>
+      <div class="field">
+        <label>循环回放</label>
+        <div class="check"><input id="mockLoop" type="checkbox" checked><label>到末尾重头</label></div>
+      </div>
+    </div>
+    <div class="btns">
+      <button class="cancel" id="btnMockStop">停止回放</button>
+      <button class="save" id="btnMockStart">加载并启动</button>
+    </div>
+    <div id="mockLoadResult" class="tip"></div>
+    <div id="mockProgress" class="tip" style="opacity:0.85"></div>
+    <div class="tip">
+      回放标的与 K线周期取「均线告警」页的设置（symbol / interval）。<br>
+      「历史回放」数据来自币安<b>现货镜像</b>（直连、无需代理），按你选的时间段/回看根数拉 K 线，逐根回放驱动 EMA 告警；适合在真实行情不方便时测试告警逻辑。<br>
+      「内置演示」无需联网，生成一段会反复穿越 EMA 的收盘价序列，点「加载并启动」即可直接看到告警触发。<br>
+      回放过程中告警弹窗与真实源一致（标题标注「模拟源」）。本页「加载并启动」即时生效；勾选上方「启用模拟数据源」并保存后，应用重启/保存也会自动用模拟源回放（需同时在「均线告警」页启用均线告警）。
     </div>
   </div>
 
@@ -115,17 +207,8 @@
     <button class="save" id="save">保存</button>
   </div>
   <button class="quit" id="quit">退出程序</button>
-  <div id="pairHint" class="tip"></div>
-  <button id="reloadPairs" class="reload-btn">重试加载合约列表</button>
-  <div class="tip">
-    「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 合约交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
-    「均线接近告警」：后台定时拉取所选合约交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
-    例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
-    交易对输入框支持自动补全：输入「bnb」会提示「BNBUSDT」（大小写不敏感、子串匹配）。优先用币安合约列表；合约列表拉不到（多为代理节点地区被 Binance 451 限制）时，自动用现货列表兜底，主流对仍可用；点「重试加载」可在调好代理后重拉合约列表。<br>
-    「本地代理」：合约(fapi)行情在国内被墙，需走你本地 Clash 等代理；填 Clash 的 HTTP 代理端口（如 127.0.0.1:7897）。eth/btc 始终走现货镜像、不经代理。<br>
-    设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
-  </div>
 </div>
+
 <script>
   const { ipcRenderer } = require('electron');
 
@@ -134,7 +217,6 @@
   let FUTURES_SOURCE = null;
 
   function loadUsdtPairs() {
-    // 通过主进程拉取合约交易对列表（主进程走 session 代理，渲染进程 fetch 不吃代理）
     ipcRenderer.send('get-usdt-pairs');
   }
 
@@ -154,7 +236,6 @@
       for (const sym of VALID_USDT) {
         if (sym.includes(q)) matched.push(sym);
       }
-      // 前缀匹配排前，其余保持原顺序；封顶 30 条
       matched.sort((a, b) => {
         const pa = a.startsWith(q) ? 0 : 1;
         const pb = b.startsWith(q) ? 0 : 1;
@@ -177,7 +258,6 @@
         d.className = 'ac-item';
         d.textContent = sym;
         d.dataset.idx = i;
-        // mousedown 先于 blur 触发，preventDefault 阻止输入框失焦，保证点击能选中
         d.addEventListener('mousedown', (ev) => {
           ev.preventDefault();
           inputEl.value = sym;
@@ -237,7 +317,6 @@
     const list = (data && data.symbols) || [];
     VALID_USDT = new Set(list);
     FUTURES_SOURCE = (data && data.source) || null;
-    // 三类状态分别提示：合约成功 / 现货兜底 / 全部失败
     const hint = document.getElementById('pairHint');
     if (VALID_USDT.size === 0) {
       const err = (data && data.error) ? ('（' + data.error + '）') : '';
@@ -253,13 +332,91 @@
   });
   loadUsdtPairs();
 
-  // 「重试加载合约列表」：清提示后让主进程重新拉取（例如刚把代理节点地区调好）
   document.getElementById('reloadPairs').onclick = () => {
     const hint = document.getElementById('pairHint');
     hint.textContent = '正在重新加载交易对列表…';
     hint.style.color = 'rgba(245,247,250,0.5)';
     ipcRenderer.send('reload-usdt-pairs');
   };
+
+  // ============ Tab 切换 ============
+  function switchTab(name) {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+    document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === 'panel-' + name));
+  }
+  document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => switchTab(t.dataset.tab); });
+
+  // ============ 模拟源：数据范围（最近N根 / 指定时间段）显隐 ============
+  function toggleMockRange() {
+    const t = document.getElementById('mockRangeType').value;
+    document.getElementById('row-lookback').style.display = (t === 'recent') ? 'block' : 'none';
+    document.getElementById('row-range').style.display = (t === 'range') ? 'block' : 'none';
+  }
+  document.getElementById('mockRangeType').onchange = toggleMockRange;
+
+  function tsToLocalInput(ts) {
+    const d = new Date(ts);
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function fmtMock(n) {
+    if (typeof n !== 'number' || isNaN(n)) return '-';
+    if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (n >= 1) return n.toFixed(3);
+    return n.toFixed(5);
+  }
+
+  // 从表单收集模拟源参数（回放标的/周期/均线参数取「均线告警」页）
+  function collectMockParams() {
+    const mockRangeType = document.getElementById('mockRangeType').value;
+    const s = document.getElementById('mockStart').value;
+    const e2 = document.getElementById('mockEnd').value;
+    return {
+      symbol: document.getElementById('emaSymbol').value.trim().toUpperCase(),
+      interval: document.getElementById('emaInterval').value.trim().toLowerCase() || '5m',
+      emaPeriod: parseInt(document.getElementById('emaPeriod').value, 10) || 7,
+      proximityPct: parseFloat(document.getElementById('emaProx').value) || 0.5,
+      mode: document.getElementById('mockMode').value,
+      startTime: (mockRangeType === 'range' && s) ? Date.parse(s) : null,
+      endTime: (mockRangeType === 'range' && e2) ? Date.parse(e2) : null,
+      lookbackBars: parseInt(document.getElementById('mockLookback').value, 10) || 300,
+      speedMs: parseInt(document.getElementById('mockSpeed').value, 10) || 200,
+      loop: document.getElementById('mockLoop').checked,
+    };
+  }
+
+  document.getElementById('btnMockStart').onclick = () => {
+    const params = collectMockParams();
+    const el = document.getElementById('mockLoadResult');
+    el.textContent = '正在加载数据…';
+    el.style.color = 'rgba(245,247,250,0.5)';
+    ipcRenderer.send('mock:preview-start', params);
+  };
+  document.getElementById('btnMockStop').onclick = () => { ipcRenderer.send('mock:stop'); };
+
+  // 主进程回传：加载结果
+  ipcRenderer.on('mock-load-result', (e, res) => {
+    const el = document.getElementById('mockLoadResult');
+    if (res && res.ok) {
+      const tag = res.mode === 'demo' ? '内置演示数据' : (res.range === 'range' ? '历史K线（指定时间段）' : '历史K线（最近 ' + res.total + ' 根）');
+      el.textContent = '✓ 已加载 ' + res.total + ' 根（' + tag + '），开始回放';
+      el.style.color = '#7fd18a';
+    } else {
+      el.textContent = '✗ 加载失败：' + ((res && res.error) || '未知错误');
+      el.style.color = '#e05656';
+    }
+  });
+  // 主进程回传：回放进度
+  ipcRenderer.on('mock-progress', (e, p) => {
+    const el = document.getElementById('mockProgress');
+    if (!p) return;
+    if (p.running) {
+      const arrow = p.price >= p.ema ? '上方' : '下方';
+      el.innerHTML = '回放中 <b>' + p.cursor + '/' + p.total + '</b> 根 · 当前价 <b>' + fmtMock(p.price) + '</b> · 偏离 <b>' + p.distPct.toFixed(3) + '%</b>（' + arrow + '） · 已触发 <b>' + p.firedCount + '</b> 次';
+    } else if (p.finished) {
+      el.textContent = (p.cursor >= p.total && p.total) ? '回放结束（未循环）' : '已停止';
+    }
+  });
 
   ipcRenderer.on('config', (e, cfg) => {
     document.getElementById('eth').value = cfg.eth;
@@ -274,6 +431,17 @@
     document.getElementById('emaEnabled').checked = !!ema.enabled;
     document.getElementById('emaProx').value = ema.proximityPct != null ? ema.proximityPct : 0.5;
     document.getElementById('emaPoll').value = ema.pollSec != null ? ema.pollSec : 10;
+    // 模拟源回填
+    document.getElementById('mockEnabled').checked = !!ema.useMock;
+    const m = ema.mock || {};
+    document.getElementById('mockMode').value = m.mode === 'demo' ? 'demo' : 'history';
+    document.getElementById('mockRangeType').value = (m.startTime && m.endTime) ? 'range' : 'recent';
+    document.getElementById('mockLookback').value = m.lookbackBars || 300;
+    if (m.startTime) document.getElementById('mockStart').value = tsToLocalInput(m.startTime);
+    if (m.endTime) document.getElementById('mockEnd').value = tsToLocalInput(m.endTime);
+    document.getElementById('mockSpeed').value = m.speedMs || 200;
+    document.getElementById('mockLoop').checked = m.loop !== false;
+    toggleMockRange();
   });
 
   // 交易对合法性：基本格式必须是「*USDT」；拿到权威合约列表(futures)时再严格校验是否在列表中，
@@ -292,7 +460,6 @@
     const emaSymRaw = document.getElementById('emaSymbol').value.trim().toUpperCase();
     const emaInterval = document.getElementById('emaInterval').value.trim().toLowerCase() || '5m';
     const emaPeriod = parseInt(document.getElementById('emaPeriod').value, 10) || 7;
-    // 校验：格式须为 *USDT；权威合约列表已加载时必须为有效合约对
     if (sym3Raw && !validPair(sym3Raw)) {
       alert('第三交易对无效或非 USDT 交易对：' + sym3Raw);
       return;
@@ -301,6 +468,9 @@
       alert('均线交易对无效或非 USDT 交易对：' + emaSymRaw);
       return;
     }
+    const mockRangeType = document.getElementById('mockRangeType').value;
+    const mockStartVal = document.getElementById('mockStart').value;
+    const mockEndVal = document.getElementById('mockEnd').value;
     const ema = {
       enabled: document.getElementById('emaEnabled').checked,
       symbol: emaSymRaw || 'HYPEUSDT',
@@ -308,6 +478,15 @@
       emaPeriod: emaPeriod,
       proximityPct: parseFloat(document.getElementById('emaProx').value),
       pollSec: parseInt(document.getElementById('emaPoll').value, 10),
+      useMock: document.getElementById('mockEnabled').checked,
+      mock: {
+        mode: document.getElementById('mockMode').value,
+        startTime: (mockRangeType === 'range' && mockStartVal) ? Date.parse(mockStartVal) : null,
+        endTime: (mockRangeType === 'range' && mockEndVal) ? Date.parse(mockEndVal) : null,
+        lookbackBars: parseInt(document.getElementById('mockLookback').value, 10) || 300,
+        speedMs: parseInt(document.getElementById('mockSpeed').value, 10) || 200,
+        loop: document.getElementById('mockLoop').checked,
+      },
     };
     ipcRenderer.send('save-settings', {
       eth, btc,

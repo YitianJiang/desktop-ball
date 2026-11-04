@@ -73,6 +73,7 @@ function readConfig() {
     if (typeof j.proxy === 'string') cfg.proxy = j.proxy.trim();
     if (j.ema && typeof j.ema === 'object') {
       const e = j.ema;
+      const m = (e.mock && typeof e.mock === 'object') ? e.mock : {};
       cfg.ema = {
         enabled: !!e.enabled,
         symbol: String(e.symbol || 'HYPEUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT',
@@ -80,6 +81,15 @@ function readConfig() {
         emaPeriod: Number(e.emaPeriod) || 7,
         proximityPct: Number(e.proximityPct) > 0 ? Number(e.proximityPct) : 0.5,
         pollSec: Number(e.pollSec) >= 3 ? Number(e.pollSec) : 10,
+        useMock: !!e.useMock,
+        mock: {
+          mode: m.mode === 'demo' ? 'demo' : 'history',
+          startTime: m.startTime ? Number(m.startTime) : null,
+          endTime: m.endTime ? Number(m.endTime) : null,
+          lookbackBars: Number(m.lookbackBars) || 300,
+          speedMs: Number(m.speedMs) || 200,
+          loop: m.loop !== false,
+        },
       };
     }
   } catch (e) {}
@@ -252,7 +262,7 @@ function openSettings() {
   if (settingsWin) { try { settingsWin.focus(); } catch (e) {} return; }
   settingsWin = new BrowserWindow({
     width: 320,
-    height: 580,
+    height: 640,
     frame: false,
     alwaysOnTop: true,
     resizable: false,
@@ -276,7 +286,6 @@ function openSettings() {
   settingsWin.on('closed', () => { settingsWin = null; });
 }
 
-// 均线接近告警：监听某交易对现价与指定周期 EMA 的距离，接近即弹窗
 // 计算 EMA：前 period 根用 SMA 种子，之后递推
 function computeEMA(closes, period) {
   if (!Array.isArray(closes) || closes.length < period) return null;
@@ -288,21 +297,132 @@ function computeEMA(closes, period) {
   return ema;
 }
 
-let emaTimer = null;
-let emaArmed = true;
+// ===== 模拟数据源（用于驱动均线告警，无需真实联网即可回放历史/演示数据） =====
+// 把一段 K 线收盘价序列按 speedMs 逐根回放：每回放一根用最新窗口算 EMA + 当前价，
+// 偏离 ≤ proximityPct 即触发均线告警（与真实源共用 showEmaAlert / armed 机制）。
+// history：从币安现货镜像（直连、无需代理）按指定时间段/回看根数拉历史 K 线回放；
+// demo：内置合成一段会反复穿越 EMA 的收盘价序列，开箱即用测试告警。
+function genDemoCloses(base, n, period) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const wave = Math.sin((i / period) * Math.PI * 2) * base * 0.04; // 周期≈period 根、振幅 4%
+    const drift = (i / n) * base * 0.05;                            // 缓慢上行 5%
+    const noise = (Math.random() - 0.5) * base * 0.012;              // 噪声 1.2%
+    out.push(Math.max(0.01, base + wave + drift + noise));
+  }
+  return out;
+}
 
-function startEmaMonitor() {
-  stopEmaMonitor();
+class MockEmaEngine {
+  constructor(opts) {
+    this.symbol = opts.symbol;
+    this.interval = opts.interval;
+    this.period = opts.period;
+    this.prox = opts.prox;
+    this.speedMs = opts.speedMs;
+    this.loop = opts.loop;
+    this.mode = opts.mode;
+    this.startTime = opts.startTime || null;
+    this.endTime = opts.endTime || null;
+    this.lookbackBars = opts.lookbackBars || 300;
+    this.allCloses = [];
+    this.cursor = 0;
+    this.timer = null;
+    this.armed = true;
+    this.firedCount = 0;
+    this.running = false;
+  }
+  async load() {
+    if (this.mode === 'demo') {
+      this.allCloses = genDemoCloses(100, this.lookbackBars + this.period * 3, this.period);
+      this.cursor = 0;
+      return { ok: true, total: this.allCloses.length, mode: 'demo' };
+    }
+    // history：拉现货镜像历史 K 线（直连、无需代理），按时间段或回看根数
+    try {
+      let url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(this.symbol)}&interval=${this.interval}&limit=1000`;
+      if (this.startTime && this.endTime) {
+        url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(this.symbol)}&interval=${this.interval}&startTime=${this.startTime}&endTime=${this.endTime}&limit=1000`;
+      } else if (this.startTime) {
+        url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(this.symbol)}&interval=${this.interval}&startTime=${this.startTime}&limit=1000`;
+      } else {
+        url = `https://data-api.binance.vision/api/v3/klines?symbol=${encodeURIComponent(this.symbol)}&interval=${this.interval}&limit=${Math.min(1000, Math.max(50, this.lookbackBars))}`;
+      }
+      const klines = await httpJson(url, 12000);
+      if (!Array.isArray(klines) || klines.length < this.period) {
+        return { ok: false, error: '历史数据不足（K 线根数 < EMA 周期），请换更长的时间段或更大的回看根数' };
+      }
+      this.allCloses = klines.map((k) => parseFloat(k[4]));
+      this.cursor = 0;
+      return { ok: true, total: this.allCloses.length, mode: 'history', range: (this.startTime && this.endTime) ? 'range' : 'recent' };
+    } catch (e) {
+      return { ok: false, error: '拉取历史 K 线失败：' + ((e && e.message) ? e.message : String(e)) + '（现货镜像直连，请检查网络）' };
+    }
+  }
+  start() {
+    if (this.running || this.allCloses.length < this.period) return;
+    this.running = true;
+    this.armed = true;
+    const step = () => {
+      if (!this.running) return;
+      const closes = this.allCloses.slice(0, this.cursor + 1);
+      const ema = computeEMA(closes, this.period);
+      const price = this.allCloses[this.cursor];
+      if (ema && price) {
+        const distPct = (Math.abs(price - ema) / ema) * 100;
+        if (distPct <= this.prox) {
+          if (this.armed) {
+            this.armed = false;
+            this.firedCount++;
+            showEmaAlert({ symbol: this.symbol, interval: this.interval, emaPeriod: this.period, price, ema, distPct, mock: true });
+          }
+        } else if (distPct > this.prox * 3) {
+          this.armed = true;
+        }
+        this.pushProgress(price, ema, distPct, false);
+      }
+      this.cursor++;
+      if (this.cursor >= this.allCloses.length) {
+        if (this.loop) { this.cursor = 0; this.armed = true; }
+        else { this.stop(); return; }
+      }
+    };
+    this.timer = setInterval(step, this.speedMs);
+    step();
+  }
+  pushProgress(price, ema, distPct, finished) {
+    const payload = {
+      running: this.running,
+      cursor: this.cursor,
+      total: this.allCloses.length,
+      price, ema, distPct,
+      firedCount: this.firedCount,
+      finished: !!finished,
+    };
+    if (settingsWin && settingsWin.webContents && !settingsWin.webContents.isDestroyed()) {
+      settingsWin.webContents.send('mock-progress', payload);
+    }
+  }
+  stop() {
+    this.running = false;
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    this.pushProgress(null, null, null, true);
+  }
+}
+
+let emaTimer = null;       // 真实源轮询定时器
+let mockEngine = null;     // 模拟数据源引擎
+
+// 真实行情源：定时从币安合约(fapi)拉 K 线 + 实时价，算 EMA 偏离触发告警
+function startRealEma() {
   const e = cfg.ema;
-  if (!e || !e.enabled) return;
-  emaArmed = true;
   const sym = e.symbol.toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT';
   const interval = e.interval;
   const emaPeriod = e.emaPeriod;
   const prox = e.proximityPct;
   const pollMs = Math.max(3000, e.pollSec * 1000);
-  // klines 数量：覆盖 EMA 周期并留足预热，封顶 1000
   const limit = Math.min(1000, Math.max(emaPeriod * 2 + 100, 400));
+  let armed = true;
   const tick = async () => {
     try {
       const klUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${encodeURIComponent(sym)}&interval=${interval}&limit=${limit}`;
@@ -316,27 +436,54 @@ function startEmaMonitor() {
       if (!ema || !price) return;
       const distPct = (Math.abs(price - ema) / ema) * 100;
       if (distPct <= prox) {
-        // 触发：仅在 armed 时弹一次，关闭/远离后重新武装
-        if (emaArmed) {
-          emaArmed = false;
-          showEmaAlert({ symbol: sym, interval, emaPeriod, price, ema, distPct });
-        }
+        if (armed) { armed = false; showEmaAlert({ symbol: sym, interval, emaPeriod, price, ema, distPct, mock: false }); }
       } else if (distPct > prox * 3) {
-        emaArmed = true; // 滞后重置，避免贴着均线反复弹
+        armed = true;
       }
-    } catch (err) {
-      // 网络异常忽略，下一轮重试
-    }
+    } catch (err) { /* 网络异常忽略，下一轮重试 */ }
   };
   emaTimer = setInterval(tick, pollMs);
   tick();
 }
 
+// 模拟源：按 opts 构造引擎并 load + start（结果回传设置页）；opts 缺省时回退到 cfg.ema
+function startMockEma(opts) {
+  const o = opts || {};
+  const e = cfg.ema;
+  const eng = new MockEmaEngine({
+    symbol: (o.symbol || e.symbol).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT',
+    interval: o.interval || e.interval || '5m',
+    period: Number(o.emaPeriod || e.emaPeriod) || 7,
+    prox: Number(o.proximityPct || e.proximityPct) || 0.5,
+    speedMs: Math.max(20, Number(o.speedMs) || (e.mock && e.mock.speedMs) || 200),
+    loop: o.loop !== undefined ? !!o.loop : (e.mock ? e.mock.loop !== false : true),
+    mode: o.mode || (e.mock && e.mock.mode) || 'history',
+    startTime: o.startTime || (e.mock && e.mock.startTime) || null,
+    endTime: o.endTime || (e.mock && e.mock.endTime) || null,
+    lookbackBars: Number(o.lookbackBars) || (e.mock && e.mock.lookbackBars) || 300,
+  });
+  eng.load().then((res) => {
+    if (settingsWin && settingsWin.webContents && !settingsWin.webContents.isDestroyed()) {
+      settingsWin.webContents.send('mock-load-result', res);
+    }
+    if (res.ok) eng.start();
+    else mockEngine = null;
+  });
+  mockEngine = eng;
+}
+
+// EMA 监控统一入口：按 useMock 分流真实源 / 模拟源
+function startEmaMonitor() {
+  stopEmaMonitor();
+  const e = cfg.ema;
+  if (!e || !e.enabled) return;
+  if (e.useMock) startMockEma();
+  else startRealEma();
+}
+
 function stopEmaMonitor() {
-  if (emaTimer) {
-    clearInterval(emaTimer);
-    emaTimer = null;
-  }
+  if (emaTimer) { clearInterval(emaTimer); emaTimer = null; }
+  if (mockEngine) { try { mockEngine.stop(); } catch (e2) {} mockEngine = null; }
 }
 
 // 均线接近告警弹窗：带文字详情（区别于 ETH/BTC 的纯红色"!"）
@@ -436,6 +583,13 @@ ipcMain.on('save-settings', async (e, d) => {
   }
   if (settingsWin) settingsWin.close();
 });
+// 模拟数据源：设置页「加载并启动回放」——用当前表单的 mock 参数构造临时引擎 load+start（不依赖保存）
+ipcMain.on('mock:preview-start', (e, opts) => {
+  stopEmaMonitor();
+  startMockEma(opts || {});
+});
+// 模拟数据源：停止回放
+ipcMain.on('mock:stop', () => { stopEmaMonitor(); });
 ipcMain.on('win:move', (e, delta) => {
   if (ballWin) {
     const [x, y] = ballWin.getPosition();

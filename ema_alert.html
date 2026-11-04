@@ -44,6 +44,7 @@
   }
   function render(d) {
     if (!d) return;
+    document.getElementById('badge').textContent = d.mock ? '均线接近告警 · 模拟源' : '均线接近告警';
     document.getElementById('title').textContent = `${d.symbol} 接近 EMA${d.emaPeriod}`;
     document.getElementById('symbol').textContent = d.symbol;
     document.getElementById('interval').textContent = d.interval;
