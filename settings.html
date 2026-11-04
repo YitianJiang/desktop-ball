@@ -56,6 +56,18 @@
   .panel { display: none; }
   .panel.active { display: block; }
   #mockProgress b { color: #ffd166; }
+  /* 均线告警动态行：每个交易对一行，独立配置周期/EMA/幅度 */
+  .ema-row { background: #11141b; border: 1px solid #2c303c; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+  .row-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .row-head .ac-wrap { flex: 1; }
+  .ema-del { flex: 0 0 auto; width: 28px; height: 28px; padding: 0; background: #2a2020; color: #e05656; border: 1px solid #5a2a2a; border-radius: 6px; font-size: 13px; line-height: 1; }
+  .ema-del:hover { background: #3a2626; }
+  .row-fields { display: flex; gap: 8px; }
+  .row-fields .field { flex: 1; margin-bottom: 0; }
+  .row-fields label { font-size: 11px; }
+  .row-fields input { padding: 6px 8px; font-size: 13px; }
+  .add-row { width: 100%; padding: 8px; margin-top: 2px; background: #222633; color: #9db4e0; border: 1px dashed #3a3f4d; border-radius: 8px; font-size: 12px; cursor: pointer; }
+  .add-row:hover { background: #2a3142; }
 </style>
 </head>
 <body>
@@ -110,36 +122,23 @@
       <label>启用（价格接近均线时弹窗告警）</label>
     </div>
     <div class="field">
-      <label>监控交易对（多个用逗号或空格分隔，仅 USDT 合约交易对；每个对独立监控、独立弹窗）</label>
-      <input id="emaSymbols" type="text" placeholder="如 HYPEUSDT,BTCUSDT,ETHUSDT" autocomplete="off">
+      <label>监控交易对（每个对可单独配置 K线周期 / 均线周期 / 接近幅度；各自独立监控、独立弹窗）</label>
+      <div id="emaRows"></div>
+      <button class="add-row" id="addEmaRow">+ 添加交易对</button>
     </div>
     <div class="two">
       <div class="field">
-        <label>K线周期</label>
-        <input id="emaInterval" type="text" placeholder="如 5m" autocomplete="off">
-      </div>
-      <div class="field">
-        <label>均线周期</label>
-        <input id="emaPeriod" type="text" placeholder="如 7" autocomplete="off">
-      </div>
-    </div>
-    <div class="two">
-      <div class="field">
-        <label>接近幅度（%）</label>
-        <input id="emaProx" type="number" step="any" min="0.01" value="0.5">
-      </div>
-      <div class="field">
-        <label>检查间隔（秒）</label>
+        <label>检查间隔（秒，仅真实行情）</label>
         <input id="emaPoll" type="number" step="1" min="3" value="10">
       </div>
-    </div>
-    <div class="check">
-      <input id="emaShowDetail" type="checkbox" checked>
-      <label>告警面板显示明细（当前价 / EMA 值 / 偏离幅度）</label>
+      <div class="check" style="align-self:flex-end; padding-bottom:8px;">
+        <input id="emaShowDetail" type="checkbox" checked>
+        <label>显示明细</label>
+      </div>
     </div>
     <div class="tip">
-      「均线接近告警」：后台定时（检查间隔）拉取所选<b>每个</b>合约交易对的 K 线计算所选 EMA，当某对现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗；多个交易对各自独立监控、各自弹窗。<br>
-      例如 HYPEUSDT,BTCUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 任一对现价距其 EMA7 不到 0.5% 即告警。<br>
+      「均线接近告警」：每个交易对按各自的 K线周期 / 均线周期 / 接近幅度独立监控，价格距其 EMA 不到「接近幅度%」即弹窗。<br>
+      例如 HYPEUSDT(5m·EMA7·0.5%) 与 BTCUSDT(15m·EMA20·1%) 可分别配置、互不干扰。<br>
       检查间隔仅对「真实行情」数据源生效；改用「模拟源」（见下一页）时，回放速度由模拟源页控制。<br>
       若想用回放数据测试本告警，请到「模拟源」页勾选「启用模拟数据源」并指定时间段。
     </div>
@@ -181,7 +180,7 @@
     <div id="mockLoadResult" class="tip"></div>
     <div id="mockProgress" class="tip" style="opacity:0.85"></div>
     <div class="tip">
-      回放标的与 K线周期取「均线告警」页的设置（symbols / interval），可同时回放多个交易对，每个对独立回放、独立弹窗。<br>
+      回放标的、K线周期、均线周期、接近幅度均取「均线告警」页每行的独立配置，可同时回放多个交易对，每个对独立回放、独立弹窗。<br>
       「历史回放」数据来自币安<b>现货镜像</b>（直连、无需代理），按你指定的时间段拉该标的的历史 K 线，逐根回放驱动 EMA 告警；适合在真实行情不方便时测试告警逻辑。<br>
       「回放速度（每根K线间隔毫秒）」：每回放一根历史 K 线所间隔的毫秒数。例如 200ms/根、1000 根 ≈ 200 秒（约 3 分钟）回放完一遍；调小则更快、调大则更慢。仅影响回放节奏，不影响告警判定。<br>
       回放过程中告警弹窗与真实源一致（标题标注「模拟源」）。本页「加载并启动」即时生效；勾选上方「启用模拟数据源」并保存后，应用重启/保存也会自动用模拟源回放（需同时在「均线告警」页启用均线告警）。
@@ -298,6 +297,50 @@
 
   const acSym3 = setupAutocomplete(document.getElementById('sym3'), document.getElementById('drop-sym3'));
 
+  // ============ 均线告警：动态行（每对独立参数） ============
+  // 每行：交易对(自动补全) + K线周期 + 均线周期 + 接近幅度%；可增删，独立监控。
+  function addEmaRow(data) {
+    data = data || {};
+    const row = document.createElement('div');
+    row.className = 'ema-row';
+    const sym = data.symbol || '';
+    const interval = data.interval || '5m';
+    const period = (data.emaPeriod != null) ? data.emaPeriod : 7;
+    const prox = (data.proximityPct != null) ? data.proximityPct : 0.5;
+    row.innerHTML =
+      '<div class="row-head">' +
+        '<div class="ac-wrap">' +
+          '<input class="ema-sym" type="text" placeholder="交易对，如 HYPEUSDT" autocomplete="off" value="' + sym + '">' +
+          '<div class="ac-drop ema-drop"></div>' +
+        '</div>' +
+        '<button class="ema-del" title="删除">✕</button>' +
+      '</div>' +
+      '<div class="row-fields">' +
+        '<div class="field"><label>K线周期</label><input class="ema-interval" type="text" placeholder="5m" value="' + interval + '"></div>' +
+        '<div class="field"><label>均线周期</label><input class="ema-period" type="text" placeholder="7" value="' + period + '"></div>' +
+        '<div class="field"><label>接近幅度%</label><input class="ema-prox" type="number" step="any" min="0.01" placeholder="0.5" value="' + prox + '"></div>' +
+      '</div>';
+    // 每行交易对输入框绑定自动补全
+    setupAutocomplete(row.querySelector('.ema-sym'), row.querySelector('.ema-drop'));
+    row.querySelector('.ema-del').onclick = () => { row.remove(); };
+    document.getElementById('emaRows').appendChild(row);
+  }
+  function readEmaRows() {
+    const rows = [];
+    document.querySelectorAll('#emaRows .ema-row').forEach((row) => {
+      const symbol = row.querySelector('.ema-sym').value.trim().toUpperCase();
+      if (!symbol) return;
+      rows.push({
+        symbol,
+        interval: row.querySelector('.ema-interval').value.trim().toLowerCase() || '5m',
+        emaPeriod: parseInt(row.querySelector('.ema-period').value, 10) || 7,
+        proximityPct: parseFloat(row.querySelector('.ema-prox').value) || 0.5,
+      });
+    });
+    return rows;
+  }
+  document.getElementById('addEmaRow').onclick = () => addEmaRow();
+
   ipcRenderer.on('usdt-pairs', (e, data) => {
     const list = (data && data.symbols) || [];
     VALID_USDT = new Set(list);
@@ -343,16 +386,14 @@
     return n.toFixed(5);
   }
 
-  // 从表单收集模拟源参数（回放标的/周期/均线参数取「均线告警」页）
+  // 从表单收集模拟源参数（回放标的/周期/均线参数取「均线告警」页每行的独立配置）
   function collectMockParams() {
-    const syms = document.getElementById('emaSymbols').value.trim().toUpperCase().split(/[,\s]+/).filter(Boolean);
+    const rows = readEmaRows();
+    const syms = rows.length ? rows : [{ symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5 }];
     const s = document.getElementById('mockStart').value;
     const e2 = document.getElementById('mockEnd').value;
     return {
-      symbols: syms.length ? syms : ['HYPEUSDT'],
-      interval: document.getElementById('emaInterval').value.trim().toLowerCase() || '5m',
-      emaPeriod: parseInt(document.getElementById('emaPeriod').value, 10) || 7,
-      proximityPct: parseFloat(document.getElementById('emaProx').value) || 0.5,
+      symbols: syms,
       startTime: s ? Date.parse(s) : null,
       endTime: e2 ? Date.parse(e2) : null,
       speedMs: parseInt(document.getElementById('mockSpeed').value, 10) || 200,
@@ -427,11 +468,17 @@
     document.getElementById('sym3').value = cfg.symbol3 || '';
     document.getElementById('proxy').value = cfg.proxy || '';
     const ema = cfg.ema || {};
-    document.getElementById('emaSymbols').value = (Array.isArray(ema.symbols) && ema.symbols.length) ? ema.symbols.join(', ') : 'HYPEUSDT';
-    document.getElementById('emaInterval').value = ema.interval || '5m';
-    document.getElementById('emaPeriod').value = ema.emaPeriod || 7;
+    // 清空并重建动态行（兼容旧版字符串数组 / 单 symbol / 新版对象数组）
+    const rowsHost = document.getElementById('emaRows');
+    rowsHost.innerHTML = '';
+    const emaSyms = (Array.isArray(ema.symbols) && ema.symbols.length) ? ema.symbols : [{ symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5 }];
+    for (const s of emaSyms) {
+      const item = (typeof s === 'string')
+        ? { symbol: s, interval: '5m', emaPeriod: 7, proximityPct: 0.5 }
+        : { symbol: s.symbol, interval: s.interval || '5m', emaPeriod: (s.emaPeriod != null ? s.emaPeriod : 7), proximityPct: (s.proximityPct != null ? s.proximityPct : 0.5) };
+      addEmaRow(item);
+    }
     document.getElementById('emaEnabled').checked = !!ema.enabled;
-    document.getElementById('emaProx').value = ema.proximityPct != null ? ema.proximityPct : 0.5;
     document.getElementById('emaPoll').value = ema.pollSec != null ? ema.pollSec : 10;
     document.getElementById('emaShowDetail').checked = ema.showDetail !== false;
     // 模拟源回填
@@ -456,24 +503,20 @@
     const btc = parseFloat(document.getElementById('btc').value);
     if (isNaN(eth) || isNaN(btc)) return;
     const sym3Raw = document.getElementById('sym3').value.trim().toUpperCase();
-    const emaSymsRaw = document.getElementById('emaSymbols').value.trim().toUpperCase().split(/[,\s]+/).filter(Boolean);
-    const emaInterval = document.getElementById('emaInterval').value.trim().toLowerCase() || '5m';
-    const emaPeriod = parseInt(document.getElementById('emaPeriod').value, 10) || 7;
+    const rows = readEmaRows();
+    if (rows.length === 0) { alert('请至少添加一个均线监控交易对'); return; }
     if (sym3Raw && !validPair(sym3Raw)) {
       alert('第三交易对无效或非 USDT 交易对：' + sym3Raw);
       return;
     }
-    for (const s of emaSymsRaw) {
-      if (!validPair(s)) { alert('均线监控交易对无效或非 USDT 交易对：' + s); return; }
+    for (const r of rows) {
+      if (!validPair(r.symbol)) { alert('均线监控交易对无效或非 USDT 交易对：' + r.symbol); return; }
     }
     const mockStartVal = document.getElementById('mockStart').value;
     const mockEndVal = document.getElementById('mockEnd').value;
     const ema = {
       enabled: document.getElementById('emaEnabled').checked,
-      symbols: emaSymsRaw.length ? emaSymsRaw : ['HYPEUSDT'],
-      interval: emaInterval,
-      emaPeriod: emaPeriod,
-      proximityPct: parseFloat(document.getElementById('emaProx').value),
+      symbols: rows,
       pollSec: parseInt(document.getElementById('emaPoll').value, 10),
       showDetail: document.getElementById('emaShowDetail').checked,
       useMock: document.getElementById('mockEnabled').checked,

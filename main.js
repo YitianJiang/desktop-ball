@@ -49,8 +49,35 @@ const DEFAULT_CFG = {
   autostart: true,
   symbol3: '', // 第三交易对：空=不显示；配置后球上加一行实时价（eth/btc 始终显示）
   proxy: '127.0.0.1:7897',   // 本地代理（Clash HTTP 端口）；合约(fapi)行情走它；eth/btc 现货绕过直连。如你的 Clash 端口不同，请在设置里改
-  ema: { enabled: false, symbols: ['HYPEUSDT'], interval: '5m', emaPeriod: 7, proximityPct: 0.5, pollSec: 10, showDetail: true },
+  ema: { enabled: false, symbols: [{ symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5 }], pollSec: 10, showDetail: true },
 };
+
+// 归一化均线告警交易对列表：兼容旧版（单 symbol 字符串 / 字符串数组，参数共享）
+// 与新版（对象数组 [{symbol, interval, emaPeriod, proximityPct}]，每对独立参数）。
+// 旧版缺少的参数用传入 e.interval / e.emaPeriod / e.proximityPct 兜底；新版缺则给默认。
+function normalizeEmaSymbols(e) {
+  let arr;
+  if (Array.isArray(e.symbols) && e.symbols.length) arr = e.symbols;
+  else if (typeof e.symbol === 'string' && e.symbol) {
+    arr = e.symbol.toUpperCase().replace(/[^A-Z0-9]/g, '').split(/(?:,|\s)+/).filter(Boolean).map((s) => ({ symbol: s }));
+  } else arr = [{ symbol: 'HYPEUSDT' }];
+  const defInterval = typeof e.interval === 'string' ? e.interval : '5m';
+  const defPeriod = Number(e.emaPeriod) || 7;
+  const defProx = Number(e.proximityPct) > 0 ? Number(e.proximityPct) : 0.5;
+  const out = [];
+  for (const it of arr) {
+    let symbol, interval, emaPeriod, prox;
+    if (typeof it === 'string') { symbol = it.toUpperCase().replace(/[^A-Z0-9]/g, ''); interval = defInterval; emaPeriod = defPeriod; prox = defProx; }
+    else if (it && typeof it.symbol === 'string') {
+      symbol = String(it.symbol).toUpperCase().replace(/[^A-Z0-9]/g, '');
+      interval = (typeof it.interval === 'string' && it.interval) ? it.interval : defInterval;
+      emaPeriod = Number(it.emaPeriod) || defPeriod;
+      prox = Number(it.proximityPct) > 0 ? Number(it.proximityPct) : defProx;
+    }
+    if (symbol) out.push({ symbol, interval, emaPeriod, proximityPct: prox });
+  }
+  return out.length ? out : [{ symbol: 'HYPEUSDT', interval: defInterval, emaPeriod: defPeriod, proximityPct: defProx }];
+}
 
 // 读取配置：缺失字段用默认值补齐，兼容旧版（没有 ema 字段）配置
 function readConfig() {
@@ -74,21 +101,9 @@ function readConfig() {
     if (j.ema && typeof j.ema === 'object') {
       const e = j.ema;
       const m = (e.mock && typeof e.mock === 'object') ? e.mock : {};
-      // 交易对：兼容旧版单 symbol 字符串 → 新 symbols 数组（逗号/空格分隔）
-      let symbols = ['HYPEUSDT'];
-      if (Array.isArray(e.symbols)) {
-        symbols = e.symbols.map((s) => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '')).filter(Boolean);
-        if (symbols.length === 0) symbols = ['HYPEUSDT'];
-      } else if (typeof e.symbol === 'string' && e.symbol) {
-        symbols = e.symbol.toUpperCase().replace(/[^A-Z0-9]/g, '').split(/(?:,|\s)+/).filter(Boolean);
-        if (symbols.length === 0) symbols = ['HYPEUSDT'];
-      }
       cfg.ema = {
         enabled: !!e.enabled,
-        symbols,
-        interval: typeof e.interval === 'string' ? e.interval : '5m',
-        emaPeriod: Number(e.emaPeriod) || 7,
-        proximityPct: Number(e.proximityPct) > 0 ? Number(e.proximityPct) : 0.5,
+        symbols: normalizeEmaSymbols(e), // 每对独立参数；兼容旧版字符串数组/单 symbol
         pollSec: Number(e.pollSec) >= 3 ? Number(e.pollSec) : 10,
         showDetail: e.showDetail !== false, // 告警面板是否显示明细（当前价/EMA/偏离幅度）
         useMock: !!e.useMock,
@@ -434,17 +449,17 @@ function startMockEma(opts) {
   const e = cfg.ema;
   const symbols = (opts && Array.isArray(opts.symbols) && opts.symbols.length)
     ? opts.symbols
-    : (e.symbols && e.symbols.length ? e.symbols : ['HYPEUSDT']);
-  const interval = (opts && opts.interval) || e.interval || '5m';
-  const period = Number((opts && opts.emaPeriod) || e.emaPeriod) || 7;
-  const prox = Number((opts && opts.proximityPct) || e.proximityPct) || 0.5;
+    : (Array.isArray(e.symbols) && e.symbols.length ? e.symbols : [{ symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5 }]);
   const speedMs = Math.max(20, Number((opts && opts.speedMs)) || (e.mock && e.mock.speedMs) || 200);
   const loop = (opts && typeof opts.loop === 'boolean') ? opts.loop : (e.mock ? e.mock.loop !== false : true);
   const startTime = (opts && opts.startTime) || (e.mock && e.mock.startTime) || null;
   const endTime = (opts && opts.endTime) || (e.mock && e.mock.endTime) || null;
   mockEngines = [];
-  for (const raw of symbols) {
-    const sym = String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT';
+  for (const it of symbols) {
+    const sym = (it.symbol || 'HYPEUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT';
+    const interval = it.interval || '5m';
+    const period = Number(it.emaPeriod) || 7;
+    const prox = Number(it.proximityPct) > 0 ? Number(it.proximityPct) : 0.5;
     const eng = new MockEmaEngine({ symbol: sym, interval, period, prox, speedMs, loop, startTime, endTime });
     eng.load().then((res) => {
       if (settingsWin && settingsWin.webContents && !settingsWin.webContents.isDestroyed()) {
@@ -456,18 +471,18 @@ function startMockEma(opts) {
   }
 }
 
-// 真实源：对每个监控交易对各起一个轮询
+// 真实源：对每个监控交易对各起一个轮询（每对独立参数）
 function startRealEma() {
   const e = cfg.ema;
-  const interval = e.interval;
-  const emaPeriod = e.emaPeriod;
-  const prox = e.proximityPct;
   const pollMs = Math.max(3000, e.pollSec * 1000);
-  const limit = Math.min(1000, Math.max(emaPeriod * 2 + 100, 400));
   emaTimers = [];
-  const symbols = (e.symbols && e.symbols.length) ? e.symbols : ['HYPEUSDT'];
-  for (const raw of symbols) {
-    const sym = String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT';
+  const symbols = (e.symbols && e.symbols.length) ? e.symbols : [{ symbol: 'HYPEUSDT', interval: '5m', emaPeriod: 7, proximityPct: 0.5 }];
+  for (const it of symbols) {
+    const sym = (it.symbol || 'HYPEUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'HYPEUSDT';
+    const interval = it.interval || '5m';
+    const emaPeriod = Number(it.emaPeriod) || 7;
+    const prox = Number(it.proximityPct) > 0 ? Number(it.proximityPct) : 0.5;
+    const limit = Math.min(1000, Math.max(emaPeriod * 2 + 100, 400));
     runRealEmaForSymbol(sym, interval, emaPeriod, prox, pollMs, limit);
   }
 }
@@ -565,25 +580,20 @@ ipcMain.on('save-settings', async (e, d) => {
     autostart: !!d.autostart,
     symbol3: (typeof d.symbol3 === 'string' && d.symbol3) ? String(d.symbol3).toUpperCase().replace(/[^A-Z0-9]/g, '') : '', // 第三交易对（第三个可配置交易对，仅显示不报警）
     proxy: (typeof d.proxy === 'string') ? d.proxy.trim() : '',
-    ema: {
-      enabled: !!ema.enabled,
-      symbols: (Array.isArray(ema.symbols) && ema.symbols.length)
-        ? ema.symbols.map((s) => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '')).filter(Boolean)
-        : ['HYPEUSDT'],
-      interval: typeof ema.interval === 'string' ? ema.interval : '5m',
-      emaPeriod: Number(ema.emaPeriod) || 7,
-      proximityPct: Number(ema.proximityPct) > 0 ? Number(ema.proximityPct) : 0.5,
-      pollSec: Number(ema.pollSec) >= 3 ? Number(ema.pollSec) : 10,
-      showDetail: ema.showDetail !== false,
-      useMock: !!ema.useMock,
-      mock: {
-        mode: 'history',
-        startTime: (ema.mock && ema.mock.startTime) ? Number(ema.mock.startTime) : null,
-        endTime: (ema.mock && ema.mock.endTime) ? Number(ema.mock.endTime) : null,
-        speedMs: (ema.mock && Number(ema.mock.speedMs)) || 200,
-        loop: !!(ema.mock && ema.mock.loop !== false),
+      ema: {
+        enabled: !!ema.enabled,
+        symbols: normalizeEmaSymbols(ema), // 每对独立参数对象数组（兼容旧字符串数组）
+        pollSec: Number(ema.pollSec) >= 3 ? Number(ema.pollSec) : 10,
+        showDetail: ema.showDetail !== false,
+        useMock: !!ema.useMock,
+        mock: {
+          mode: 'history',
+          startTime: (ema.mock && ema.mock.startTime) ? Number(ema.mock.startTime) : null,
+          endTime: (ema.mock && ema.mock.endTime) ? Number(ema.mock.endTime) : null,
+          speedMs: (ema.mock && Number(ema.mock.speedMs)) || 200,
+          loop: !!(ema.mock && ema.mock.loop !== false),
+        },
       },
-    },
   };
   writeConfig(cfg);
   applyAutostart(cfg.autostart);
