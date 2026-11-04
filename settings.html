@@ -45,6 +45,9 @@
   .cancel { background: #333845; color: #cfd3dc; }
   .quit { background: transparent; color: #e05656; border: 1px solid #5a2a2a; margin-top: 10px; width: 100%; }
   .tip { font-size: 11px; opacity: 0.5; margin-top: 12px; line-height: 1.5; }
+  .reload-btn { width: 100%; margin-top: 8px; padding: 7px; border: 1px solid #3a3f4d; border-radius: 8px;
+    background: #222633; color: #9db4e0; font-size: 12px; cursor: pointer; }
+  .reload-btn:hover { background: #2a3142; }
 </style>
 </head>
 <body>
@@ -113,11 +116,12 @@
   </div>
   <button class="quit" id="quit">退出程序</button>
   <div id="pairHint" class="tip"></div>
+  <button id="reloadPairs" class="reload-btn">重试加载合约列表</button>
   <div class="tip">
     「第三交易对」：ETH、BTC 始终显示，第三交易对默认不显示；输入或下拉选某 USDT 合约交易对后，球上会多出一行实时价（纯数字、无标签）。<br>
     「均线接近告警」：后台定时拉取所选合约交易对 K 线计算所选 EMA，当现价与 EMA 的偏离 ≤ 接近幅度% 时弹窗。<br>
     例如 HYPEUSDT / 5分钟·EMA7 / 接近幅度 0.5% → 现价距 EMA7 不到 0.5% 即告警。<br>
-    交易对输入框支持自动补全：输入「bnb」会提示「BNBUSDT」（大小写不敏感、子串匹配）；仅合约，不列现货。<br>
+    交易对输入框支持自动补全：输入「bnb」会提示「BNBUSDT」（大小写不敏感、子串匹配）。优先用币安合约列表；合约列表拉不到（多为代理节点地区被 Binance 451 限制）时，自动用现货列表兜底，主流对仍可用；点「重试加载」可在调好代理后重拉合约列表。<br>
     「本地代理」：合约(fapi)行情在国内被墙，需走你本地 Clash 等代理；填 Clash 的 HTTP 代理端口（如 127.0.0.1:7897）。eth/btc 始终走现货镜像、不经代理。<br>
     设置后实时生效并自动保存，重启后仍然保留。单击小球可再次打开本设置。
   </div>
@@ -125,8 +129,9 @@
 <script>
   const { ipcRenderer } = require('electron');
 
-  // 有效合约(USDT 永续)交易对集合：来自主进程（经本地代理拉 fapi），用于自动补全与保存校验。
+  // 有效(USDT 永续)交易对集合：来自主进程。FUTURES_SOURCE 标记来源：'futures'(合约) | 'spot-fallback'(现货兜底) | null。
   let VALID_USDT = new Set();
+  let FUTURES_SOURCE = null;
 
   function loadUsdtPairs() {
     // 通过主进程拉取合约交易对列表（主进程走 session 代理，渲染进程 fetch 不吃代理）
@@ -228,12 +233,18 @@
   const acSym3 = setupAutocomplete(document.getElementById('sym3'), document.getElementById('drop-sym3'));
   const acEma = setupAutocomplete(document.getElementById('emaSymbol'), document.getElementById('drop-emaSymbol'));
 
-  ipcRenderer.on('usdt-pairs', (e, list) => {
-    VALID_USDT = new Set(list || []);
-    // 加载失败（代理没通 / Clash 没起）→ 明确提示，不再用现货列表冒充
+  ipcRenderer.on('usdt-pairs', (e, data) => {
+    const list = (data && data.symbols) || [];
+    VALID_USDT = new Set(list);
+    FUTURES_SOURCE = (data && data.source) || null;
+    // 三类状态分别提示：合约成功 / 现货兜底 / 全部失败
     const hint = document.getElementById('pairHint');
     if (VALID_USDT.size === 0) {
-      hint.textContent = '合约交易对列表加载失败：请确认本地代理(Clash)已运行且端口正确（默认 127.0.0.1:7897），保存后重试。';
+      const err = (data && data.error) ? ('（' + data.error + '）') : '';
+      hint.textContent = '交易对列表加载失败' + err + '：请确认本地代理(Clash)已运行、端口正确（默认 127.0.0.1:7897），且代理节点地区 Binance 可用（fapi 返回 451 多为地区限制）。仍可手动输入交易对，或点「重试加载」。';
+      hint.style.color = '#e0a23c';
+    } else if (FUTURES_SOURCE === 'spot-fallback') {
+      hint.textContent = '⚠ 合约列表(fapi)加载失败，已用「现货」列表兜底自动补全（' + VALID_USDT.size + ' 个，含 BNBUSDT 等主流对）；如需精确合约对，请把代理节点地区调成 Binance 可用后点「重试加载」。';
       hint.style.color = '#e0a23c';
     } else {
       hint.textContent = '已加载 ' + VALID_USDT.size + ' 个 U 本位合约交易对（仅合约，经本地代理）。输入如 bnb/ena 即出提示。';
@@ -241,6 +252,14 @@
     }
   });
   loadUsdtPairs();
+
+  // 「重试加载合约列表」：清提示后让主进程重新拉取（例如刚把代理节点地区调好）
+  document.getElementById('reloadPairs').onclick = () => {
+    const hint = document.getElementById('pairHint');
+    hint.textContent = '正在重新加载交易对列表…';
+    hint.style.color = 'rgba(245,247,250,0.5)';
+    ipcRenderer.send('reload-usdt-pairs');
+  };
 
   ipcRenderer.on('config', (e, cfg) => {
     document.getElementById('eth').value = cfg.eth;
@@ -257,6 +276,14 @@
     document.getElementById('emaPoll').value = ema.pollSec != null ? ema.pollSec : 10;
   });
 
+  // 交易对合法性：基本格式必须是「*USDT」；拿到权威合约列表(futures)时再严格校验是否在列表中，
+  // 避免误拦合法合约对（现货兜底 / 未加载时只做格式校验，允许手动输入）。
+  function validPair(raw) {
+    if (!/^[A-Z0-9]+USDT$/.test(raw)) return false;
+    if (FUTURES_SOURCE === 'futures' && VALID_USDT.size && !VALID_USDT.has(raw)) return false;
+    return true;
+  }
+
   document.getElementById('save').onclick = () => {
     const eth = parseFloat(document.getElementById('eth').value);
     const btc = parseFloat(document.getElementById('btc').value);
@@ -265,12 +292,12 @@
     const emaSymRaw = document.getElementById('emaSymbol').value.trim().toUpperCase();
     const emaInterval = document.getElementById('emaInterval').value.trim().toLowerCase() || '5m';
     const emaPeriod = parseInt(document.getElementById('emaPeriod').value, 10) || 7;
-    // 校验：集合已加载时，必须是有效 USDT 交易对（避免手填错误导致无行情/无限重连）
-    if (sym3Raw && VALID_USDT.size && !VALID_USDT.has(sym3Raw)) {
+    // 校验：格式须为 *USDT；权威合约列表已加载时必须为有效合约对
+    if (sym3Raw && !validPair(sym3Raw)) {
       alert('第三交易对无效或非 USDT 交易对：' + sym3Raw);
       return;
     }
-    if (emaSymRaw && VALID_USDT.size && !VALID_USDT.has(emaSymRaw)) {
+    if (emaSymRaw && !validPair(emaSymRaw)) {
       alert('均线交易对无效或非 USDT 交易对：' + emaSymRaw);
       return;
     }

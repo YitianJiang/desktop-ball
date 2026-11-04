@@ -115,24 +115,68 @@ async function applyProxy(proxy) {
 }
 
 // 币安 U 本位合约(USDT 永续)交易对列表：仅作设置页自动补全用。
-// 走 fapi（合约），务必经本地代理；**不回退到现货**，否则会把现货对当成合约对。
-let FUTURES_SYMBOLS = null; // null=未加载；[]=加载失败
-async function loadFuturesSymbols() {
-  try {
-    const j = await httpJson('https://fapi.binance.com/fapi/v1/exchangeInfo', 12000);
-    if (!j || !Array.isArray(j.symbols)) { FUTURES_SYMBOLS = []; return; }
-    const set = new Set();
-    for (const s of j.symbols) {
-      // 仅 USDT 永续（合约 symbol 形如 BTCUSDT；季度交割含下划线如 BTCUSDT_241227 排除）
-      if (s.status === 'TRADING' && typeof s.symbol === 'string' &&
-          s.symbol.endsWith('USDT') && !s.symbol.includes('_')) {
-        set.add(s.symbol);
-      }
+// 优先走 fapi（合约，经本地代理）；失败（常见 451 地区限制 / 代理未通）则兜底用现货镜像列表（直连、无需代理），
+// 保证自动补全不空（主流对如 BNBUSDT 现货也有）。FUTURES_SOURCE 标记来源：'futures' | 'spot-fallback' | null。
+let FUTURES_SYMBOLS = null; // null=未加载；[]=加载失败且无兜底
+let FUTURES_SOURCE = null;
+let FUTURES_ERROR = null;
+let futuresLoadPromise = null;
+
+// 从某个 exchangeInfo 响应里筛出「TRADING + 以 USDT 结尾 + 非季度(_)」的交易对
+function pickUsdtPerpetual(symbols) {
+  const set = new Set();
+  if (!Array.isArray(symbols)) return set;
+  for (const s of symbols) {
+    if (s.status === 'TRADING' && typeof s.symbol === 'string' &&
+        s.symbol.endsWith('USDT') && !s.symbol.includes('_')) {
+      set.add(s.symbol);
     }
-    FUTURES_SYMBOLS = [...set].sort();
-  } catch (e) {
-    FUTURES_SYMBOLS = [];
   }
+  return set;
+}
+
+async function loadFuturesSymbols() {
+  const MAX = 3;
+  FUTURES_SYMBOLS = null;
+  FUTURES_SOURCE = null;
+  FUTURES_ERROR = null;
+  // 1) 优先拉币安 U 本位合约(USDT 永续)官方列表（经本地代理）。失败常见：代理节点地区被 Binance 451 限制 / 代理未通。
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    try {
+      const j = await httpJson('https://fapi.binance.com/fapi/v1/exchangeInfo', 12000);
+      const set = pickUsdtPerpetual(j && j.symbols);
+      if (set.size === 0) throw new Error('列表为空');
+      FUTURES_SYMBOLS = [...set].sort();
+      FUTURES_SOURCE = 'futures';
+      FUTURES_ERROR = null;
+      return;
+    } catch (e) {
+      FUTURES_ERROR = (e && e.message) ? e.message : String(e);
+      if (attempt < MAX) { await new Promise((r) => setTimeout(r, 2500 * attempt)); }
+    }
+  }
+  // 2) 合约列表失败 → 兜底用现货镜像列表（直连、无需代理），保证自动补全不空；并提示这是现货兜底。
+  try {
+    const j = await httpJson('https://data-api.binance.vision/api/v3/exchangeInfo', 10000);
+    const set = pickUsdtPerpetual(j && j.symbols);
+    if (set.size > 0) {
+      FUTURES_SYMBOLS = [...set].sort();
+      FUTURES_SOURCE = 'spot-fallback';
+      return;
+    }
+  } catch (e2) {
+    if (!FUTURES_ERROR) FUTURES_ERROR = (e2 && e2.message) ? e2.message : String(e2);
+  }
+  FUTURES_SYMBOLS = []; // 全部失败
+}
+
+// 确保列表已加载（并发去重）：已在加载中则复用同一 Promise，已加载则直接 resolve。
+function ensureFuturesLoaded() {
+  if (FUTURES_SYMBOLS !== null) return Promise.resolve();
+  if (!futuresLoadPromise) {
+    futuresLoadPromise = loadFuturesSymbols().finally(() => { futuresLoadPromise = null; });
+  }
+  return futuresLoadPromise;
 }
 let cfg = readConfig();
 
@@ -337,14 +381,32 @@ ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('open-settings', () => openSettings());
 ipcMain.on('settings:close', () => { if (settingsWin) settingsWin.close(); });
 ipcMain.on('ema-alert:dismiss', () => { if (emaAlertWin) { try { emaAlertWin.close(); } catch (e) {} emaAlertWin = null; } });
-// 设置页请求币安 U 本位合约(USDT 永续)交易对列表（仅作自动补全）。走主进程 fapi（经本地代理），
-// 不回退现货；加载失败返回空数组，由设置页提示用户检查代理。
+// 设置页请求币安交易对列表（仅作自动补全）。优先合约(fapi,经代理)，失败兜底现货镜像(直连)。
+// 返回 { symbols, source, error }：source='futures'|'spot-fallback'|null；error 为失败原因（如 451 地区限制）。
 ipcMain.on('get-usdt-pairs', (e) => {
-  if (FUTURES_SYMBOLS === null) {
-    loadFuturesSymbols().then(() => { if (e.sender && !e.sender.isDestroyed()) e.sender.send('usdt-pairs', FUTURES_SYMBOLS || []); });
-  } else {
-    if (e.sender && !e.sender.isDestroyed()) e.sender.send('usdt-pairs', FUTURES_SYMBOLS);
-  }
+  ensureFuturesLoaded().then(() => {
+    if (e.sender && !e.sender.isDestroyed()) {
+      e.sender.send('usdt-pairs', {
+        symbols: FUTURES_SYMBOLS || [],
+        source: FUTURES_SOURCE,
+        error: FUTURES_ERROR,
+      });
+    }
+  });
+});
+// 手动重试加载（设置页「重试加载」按钮）：清缓存后重新拉取，并把结果发回设置页。
+ipcMain.on('reload-usdt-pairs', () => {
+  futuresLoadPromise = null;
+  FUTURES_SYMBOLS = null;
+  ensureFuturesLoaded().then(() => {
+    if (settingsWin && settingsWin.webContents && !settingsWin.webContents.isDestroyed()) {
+      settingsWin.webContents.send('usdt-pairs', {
+        symbols: FUTURES_SYMBOLS || [],
+        source: FUTURES_SOURCE,
+        error: FUTURES_ERROR,
+      });
+    }
+  });
 });
 ipcMain.on('save-settings', async (e, d) => {
   const ema = d.ema || {};
@@ -383,7 +445,7 @@ ipcMain.on('win:move', (e, delta) => {
 
 app.whenReady().then(async () => {
   await applyProxy(cfg.proxy); // 先设代理路由（eth/btc 现货绕过、合约走代理），再加载页面
-  loadFuturesSymbols(); // 预拉合约交易对列表（经代理），供设置页自动补全
+  ensureFuturesLoaded(); // 预拉交易对列表（优先合约经代理，失败兜底现货镜像），供设置页自动补全
   createBall();
   // 开机自启动：按配置决定（默认开启），写入系统登录项
   applyAutostart(cfg.autostart !== false);
