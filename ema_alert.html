@@ -29,9 +29,9 @@
   <div class="row"><span class="k">交易对</span><span class="v" id="symbol">-</span></div>
   <div class="row"><span class="k">K线周期</span><span class="v" id="interval">-</span></div>
   <div class="row"><span class="k">均线</span><span class="v" id="emaName">-</span></div>
-  <div class="row"><span class="k">当前价格</span><span class="v" id="price">-</span></div>
-  <div class="row"><span class="k" id="emaLabel">EMA 值</span><span class="v hl" id="emaVal">-</span></div>
-  <div class="row"><span class="k">偏离幅度</span><span class="v hl" id="dist">-</span></div>
+  <div class="row detail"><span class="k">当前价格</span><span class="v" id="price">-</span></div>
+  <div class="row detail"><span class="k" id="emaLabel">EMA 值</span><span class="v hl" id="emaVal">-</span></div>
+  <div class="row detail"><span class="k">偏离幅度</span><span class="v hl" id="dist">-</span></div>
   <div class="tip">点击任意处关闭</div>
 </div>
 <script>
@@ -49,6 +49,9 @@
     document.getElementById('symbol').textContent = d.symbol;
     document.getElementById('interval').textContent = d.interval;
     document.getElementById('emaName').textContent = `EMA${d.emaPeriod}`;
+    // 明细（当前价 / EMA / 偏离幅度）可按配置隐藏
+    const showDetail = d.showDetail !== false;
+    document.querySelectorAll('.detail').forEach((n) => { n.style.display = showDetail ? 'flex' : 'none'; });
     document.getElementById('price').textContent = fmt(d.price);
     document.getElementById('emaVal').textContent = fmt(d.ema);
     const above = d.price >= d.ema;
